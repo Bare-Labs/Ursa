@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ursa"
+version = "0.1.0"
+description = "Ursa — Offensive Security Toolkit"
+requires-python = ">=3.11"
+dependencies = [
+    "scapy>=2.5.0",
+    "mcp[cli]>=1.0.0",
+    "paramiko>=3.0.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "minor/src"]
+addopts = [
+    "-v",
+    "--tb=short",
+    "--strict-markers",
+]
+markers = [
+    "network: tests requiring mocked network I/O",
+    "slow: tests that take >1s to run",
+]
+
+[tool.coverage.run]
+source = ["major", "minor/src/ursa_minor"]
+omit = ["tests/*", "venv/*"]
+
+[tool.coverage.report]
+show_missing = true
