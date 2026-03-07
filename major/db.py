@@ -5,15 +5,14 @@ Ursa Major — Database Layer
 SQLite-backed storage for sessions, tasks, and results.
 """
 
-import sqlite3
+import hashlib
 import json
-import os
+import sqlite3
 import time
 import uuid
 from pathlib import Path
 
 from major.config import get_config
-
 
 DB_PATH = Path(get_config().get("major.db_path"))
 
@@ -95,11 +94,45 @@ def init_db():
             details TEXT DEFAULT '{}'
         );
 
+        CREATE TABLE IF NOT EXISTS approval_requests (
+            id TEXT PRIMARY KEY,
+            action TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            session_id TEXT,
+            task_type TEXT DEFAULT '',
+            args TEXT DEFAULT '{}',
+            requested_by TEXT NOT NULL,
+            reason TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            created_at REAL NOT NULL,
+            decided_at REAL,
+            decided_by TEXT,
+            decision_note TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS immutable_audit (
+            id TEXT PRIMARY KEY,
+            timestamp REAL NOT NULL,
+            actor TEXT NOT NULL,
+            action TEXT NOT NULL,
+            session_id TEXT,
+            task_id TEXT,
+            approval_id TEXT,
+            risk_level TEXT DEFAULT 'unknown',
+            policy_result TEXT DEFAULT 'unknown',
+            details TEXT DEFAULT '{}',
+            prev_hash TEXT DEFAULT '',
+            event_hash TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
         CREATE INDEX IF NOT EXISTS idx_events_session ON event_log(session_id);
         CREATE INDEX IF NOT EXISTS idx_events_timestamp ON event_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_approvals_status ON approval_requests(status);
+        CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approval_requests(created_at);
+        CREATE INDEX IF NOT EXISTS idx_immutable_timestamp ON immutable_audit(timestamp);
     """)
     db.commit()
     db.close()
@@ -377,6 +410,215 @@ def get_events(limit=100, level=None, session_id=None):
     rows = db.execute(query, params).fetchall()
     db.close()
     return [dict(r) for r in rows]
+
+
+# ── Governance ──
+
+
+def create_approval_request(
+    action,
+    risk_level,
+    session_id=None,
+    task_type="",
+    args=None,
+    requested_by="operator",
+    reason="",
+):
+    """Create a pending step-up approval request."""
+    db = get_db()
+    approval_id = str(uuid.uuid4())[:8]
+    db.execute("""
+        INSERT INTO approval_requests (
+            id, action, risk_level, session_id, task_type, args,
+            requested_by, reason, status, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+    """, (
+        approval_id,
+        action,
+        risk_level,
+        session_id,
+        task_type,
+        json.dumps(args or {}),
+        requested_by,
+        reason,
+        time.time(),
+    ))
+    db.commit()
+    db.close()
+    log_event(
+        "warning",
+        "governance",
+        f"Approval request {approval_id} created for {action} ({risk_level})",
+        session_id=session_id,
+        details={"approval_id": approval_id, "task_type": task_type, "risk_level": risk_level},
+    )
+    return approval_id
+
+
+def get_approval_request(approval_id):
+    """Get one approval request by ID."""
+    db = get_db()
+    row = db.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone()
+    db.close()
+    return dict(row) if row else None
+
+
+def list_approval_requests(status=None, limit=50):
+    """List approval requests, optionally filtered by status."""
+    db = get_db()
+    if status:
+        rows = db.execute("""
+            SELECT * FROM approval_requests
+            WHERE status=?
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (status, limit)).fetchall()
+    else:
+        rows = db.execute("""
+            SELECT * FROM approval_requests
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+
+def resolve_approval_request(approval_id, approved, decided_by="operator", note=""):
+    """Approve or reject an approval request."""
+    status = "approved" if approved else "rejected"
+    db = get_db()
+    db.execute("""
+        UPDATE approval_requests
+        SET status=?, decided_at=?, decided_by=?, decision_note=?
+        WHERE id=? AND status='pending'
+    """, (status, time.time(), decided_by, note, approval_id))
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    if changed:
+        req = get_approval_request(approval_id)
+        if req:
+            log_event(
+                "info",
+                "governance",
+                f"Approval {approval_id} {status} by {decided_by}",
+                session_id=req.get("session_id"),
+                details={"approval_id": approval_id, "status": status, "note": note},
+            )
+        return True
+    return False
+
+
+def _compute_event_hash(prev_hash, payload):
+    raw = f"{prev_hash}|{json.dumps(payload, sort_keys=True, separators=(',', ':'))}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def append_immutable_audit_event(
+    *,
+    actor,
+    action,
+    session_id=None,
+    task_id=None,
+    approval_id=None,
+    risk_level="unknown",
+    policy_result="unknown",
+    details=None,
+):
+    """Append an immutable, hash-chained audit event."""
+    db = get_db()
+    event_id = str(uuid.uuid4())[:12]
+    ts = time.time()
+
+    prev = db.execute("""
+        SELECT event_hash FROM immutable_audit
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+    """).fetchone()
+    prev_hash = prev["event_hash"] if prev else ""
+
+    payload = {
+        "id": event_id,
+        "timestamp": ts,
+        "actor": actor,
+        "action": action,
+        "session_id": session_id,
+        "task_id": task_id,
+        "approval_id": approval_id,
+        "risk_level": risk_level,
+        "policy_result": policy_result,
+        "details": details or {},
+    }
+    event_hash = _compute_event_hash(prev_hash, payload)
+
+    db.execute("""
+        INSERT INTO immutable_audit (
+            id, timestamp, actor, action, session_id, task_id, approval_id,
+            risk_level, policy_result, details, prev_hash, event_hash
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        event_id,
+        ts,
+        actor,
+        action,
+        session_id,
+        task_id,
+        approval_id,
+        risk_level,
+        policy_result,
+        json.dumps(details or {}),
+        prev_hash,
+        event_hash,
+    ))
+    db.commit()
+    db.close()
+    return event_id
+
+
+def get_immutable_audit(limit=200):
+    """Retrieve immutable audit events in reverse chronological order."""
+    db = get_db()
+    rows = db.execute("""
+        SELECT * FROM immutable_audit
+        ORDER BY timestamp DESC, id DESC
+        LIMIT ?
+    """, (limit,)).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+
+def verify_immutable_audit_chain():
+    """Verify hash integrity of all immutable audit events."""
+    db = get_db()
+    rows = db.execute("""
+        SELECT * FROM immutable_audit
+        ORDER BY timestamp ASC, id ASC
+    """).fetchall()
+    db.close()
+
+    prev_hash = ""
+    checked = 0
+    for row in rows:
+        payload = {
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "actor": row["actor"],
+            "action": row["action"],
+            "session_id": row["session_id"],
+            "task_id": row["task_id"],
+            "approval_id": row["approval_id"],
+            "risk_level": row["risk_level"],
+            "policy_result": row["policy_result"],
+            "details": json.loads(row["details"] or "{}"),
+        }
+        expected_hash = _compute_event_hash(prev_hash, payload)
+        if row["prev_hash"] != prev_hash or row["event_hash"] != expected_hash:
+            return {"ok": False, "checked": checked, "failed_event": row["id"]}
+        prev_hash = row["event_hash"]
+        checked += 1
+    return {"ok": True, "checked": checked}
 
 
 # Initialize DB on import

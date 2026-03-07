@@ -18,9 +18,8 @@ Profile support:
     Profile values override base config. CLI flags override profiles.
 """
 
-import os
-from pathlib import Path
 from copy import deepcopy
+from pathlib import Path
 
 try:
     import yaml
@@ -47,6 +46,15 @@ DEFAULTS = {
         "implant_defaults": {
             "beacon_interval": 5,
             "jitter": 0.1,
+        },
+        "governance": {
+            # Route policy decisions through the BearClaw enforcement path.
+            # "local" performs local policy checks compatible with BearClaw inputs.
+            "bearclaw_mode": "local",
+            # Enforce step-up approval for high-risk operations.
+            "require_step_up_approval": False,
+            # Risk tiers that require approval when step-up is enabled.
+            "step_up_risks": ["high", "critical"],
         },
     },
     "minor": {
