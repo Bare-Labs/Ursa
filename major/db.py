@@ -158,6 +158,19 @@ def init_db():
             due_at REAL
         );
 
+        CREATE TABLE IF NOT EXISTS campaign_checklist_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id INTEGER NOT NULL,
+            campaign TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            actor TEXT DEFAULT 'system',
+            action TEXT NOT NULL,
+            title TEXT DEFAULT '',
+            prev_status TEXT DEFAULT '',
+            new_status TEXT DEFAULT '',
+            details TEXT DEFAULT '{}'
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -171,6 +184,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_campaign_notes_created_at ON campaign_notes(created_at);
         CREATE INDEX IF NOT EXISTS idx_campaign_checklist_campaign ON campaign_checklist(campaign);
         CREATE INDEX IF NOT EXISTS idx_campaign_checklist_status ON campaign_checklist(status);
+        CREATE INDEX IF NOT EXISTS idx_campaign_checklist_history_campaign
+            ON campaign_checklist_history(campaign);
+        CREATE INDEX IF NOT EXISTS idx_campaign_checklist_history_created_at
+            ON campaign_checklist_history(created_at);
     """)
     _ensure_sessions_columns(db)
     _ensure_campaign_policy_columns(db)
@@ -894,11 +911,23 @@ def get_campaign_timeline(campaign, limit=200):
                 n.note AS summary
             FROM campaign_notes n
             WHERE n.campaign=?
+
+            UNION ALL
+
+            SELECT
+                h.created_at AS ts,
+                'checklist' AS kind,
+                CAST(h.item_id AS TEXT) AS ref_id,
+                NULL AS session_id,
+                COALESCE(NULLIF(h.new_status, ''), h.action) AS severity,
+                h.action || ': ' || h.title AS summary
+            FROM campaign_checklist_history h
+            WHERE h.campaign=?
         )
         ORDER BY ts DESC
         LIMIT ?
         """,
-        (campaign, campaign, campaign, campaign, limit),
+        (campaign, campaign, campaign, campaign, campaign, limit),
     ).fetchall()
     db.close()
     return [dict(r) for r in rows]
@@ -972,25 +1001,51 @@ def add_campaign_checklist_item(
         (campaign, now, now, title, details, owner, due_at),
     )
     item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    _record_campaign_checklist_history(
+        db,
+        item_id=item_id,
+        campaign=campaign,
+        action="created",
+        title=title,
+        new_status="pending",
+        details={"owner": owner, "due_at": due_at, "details": details},
+    )
     db.commit()
     db.close()
     return int(item_id)
 
 
-def list_campaign_checklist(campaign=None, status=None, limit=200):
-    """List checklist items, optionally filtered."""
+def list_campaign_checklist(campaign=None, status=None, owner=None, text=None, sort="created_desc", limit=200):
+    """List checklist items with optional campaign/status/owner/text filters."""
     db = get_db()
-    query = "SELECT * FROM campaign_checklist WHERE 1=1"
+    sql = "SELECT * FROM campaign_checklist WHERE 1=1"
     params = []
     if campaign:
-        query += " AND campaign=?"
+        sql += " AND campaign=?"
         params.append(campaign)
     if status:
-        query += " AND status=?"
+        sql += " AND status=?"
         params.append(status)
-    query += " ORDER BY created_at DESC LIMIT ?"
+    if owner:
+        sql += " AND owner LIKE ?"
+        params.append(f"%{owner}%")
+    if text:
+        sql += " AND (title LIKE ? OR details LIKE ?)"
+        pattern = f"%{text}%"
+        params.extend([pattern, pattern])
+
+    order_by = {
+        "created_desc": "created_at DESC",
+        "created_asc": "created_at ASC",
+        "updated_desc": "updated_at DESC",
+        "updated_asc": "updated_at ASC",
+        "due_asc": "CASE WHEN due_at IS NULL THEN 1 ELSE 0 END, due_at ASC, created_at DESC",
+        "due_desc": "CASE WHEN due_at IS NULL THEN 1 ELSE 0 END, due_at DESC, created_at DESC",
+    }.get(sort, "created_at DESC")
+
+    sql += f" ORDER BY {order_by} LIMIT ?"
     params.append(limit)
-    rows = db.execute(query, params).fetchall()
+    rows = db.execute(sql, params).fetchall()
     db.close()
     return [dict(r) for r in rows]
 
@@ -1004,10 +1059,31 @@ def update_campaign_checklist_item(item_id, **kwargs):
     updates["updated_at"] = time.time()
 
     db = get_db()
+    row = db.execute("SELECT * FROM campaign_checklist WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        db.close()
+        return False
+    before = dict(row)
     set_clause = ", ".join(f"{k}=?" for k in updates)
     params = list(updates.values()) + [item_id]
     db.execute(f"UPDATE campaign_checklist SET {set_clause} WHERE id=?", params)
     changed = db.total_changes
+    if changed > 0:
+        after = {**before, **updates}
+        changed_fields = [key for key in ("title", "details", "status", "owner", "due_at") if key in updates]
+        action = "updated"
+        if "status" in updates and updates["status"] != before.get("status"):
+            action = "status_changed"
+        _record_campaign_checklist_history(
+            db,
+            item_id=item_id,
+            campaign=before["campaign"],
+            action=action,
+            title=str(after.get("title") or ""),
+            prev_status=str(before.get("status") or ""),
+            new_status=str(after.get("status") or ""),
+            details={"changed_fields": changed_fields},
+        )
     db.commit()
     db.close()
     return changed > 0
@@ -1016,11 +1092,72 @@ def update_campaign_checklist_item(item_id, **kwargs):
 def delete_campaign_checklist_item(item_id):
     """Delete checklist item."""
     db = get_db()
+    row = db.execute("SELECT * FROM campaign_checklist WHERE id=?", (item_id,)).fetchone()
+    if not row:
+        db.close()
+        return False
+    item = dict(row)
+    _record_campaign_checklist_history(
+        db,
+        item_id=item_id,
+        campaign=item["campaign"],
+        action="deleted",
+        title=str(item.get("title") or ""),
+        prev_status=str(item.get("status") or ""),
+        details={"owner": item.get("owner") or ""},
+    )
     db.execute("DELETE FROM campaign_checklist WHERE id=?", (item_id,))
     changed = db.total_changes
     db.commit()
     db.close()
     return changed > 0
+
+
+def list_campaign_checklist_history(campaign, limit=200):
+    """List checklist history events for a campaign."""
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT * FROM campaign_checklist_history
+        WHERE campaign=?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (campaign, limit),
+    ).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+
+def _record_campaign_checklist_history(
+    db,
+    item_id,
+    campaign,
+    action,
+    title="",
+    prev_status="",
+    new_status="",
+    details=None,
+    actor="system",
+):
+    db.execute(
+        """
+        INSERT INTO campaign_checklist_history
+            (item_id, campaign, created_at, actor, action, title, prev_status, new_status, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            item_id,
+            campaign,
+            time.time(),
+            actor,
+            action,
+            title,
+            prev_status,
+            new_status,
+            json.dumps(details or {}),
+        ),
+    )
 
 
 # Initialize DB on import

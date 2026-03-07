@@ -34,6 +34,18 @@
         </div>
         <div class="stat-label">Policy Alerts</div>
     </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: {% if checklist_overdue_count > 0 %}var(--red){% else %}var(--green){% endif %}">
+            {{ checklist_overdue_count }}
+        </div>
+        <div class="stat-label">Overdue Checklist</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: {% if checklist_due_soon_count > 0 %}var(--yellow){% else %}var(--green){% endif %}">
+            {{ checklist_due_soon_count }}
+        </div>
+        <div class="stat-label">Due in 24h</div>
+    </div>
 </div>
 
 {% if top_campaigns %}
@@ -135,6 +147,91 @@
                 {% endfor %}
             </tbody>
         </table>
+    </div>
+</div>
+{% endif %}
+
+{% if top_checklist_campaigns %}
+<div class="card">
+    <h2>Checklist Pressure By Campaign</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Campaign</th>
+                <th>Open</th>
+                <th>Overdue</th>
+                <th>Due in 24h</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, counts in top_checklist_campaigns %}
+            <tr>
+                <td class="mono"><a href="/campaigns/{{ name }}">{{ name }}</a></td>
+                <td>{{ counts.open }}</td>
+                <td>{{ counts.overdue }}</td>
+                <td>{{ counts.due_soon }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if overdue_checklist_items or due_soon_checklist_items %}
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="card">
+        <h2>Overdue Checklist Items</h2>
+        {% if overdue_checklist_items %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Campaign</th>
+                    <th>Title</th>
+                    <th>Owner</th>
+                    <th>Due</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in overdue_checklist_items %}
+                <tr>
+                    <td class="mono"><a href="/campaigns/{{ item.campaign }}">{{ item.campaign }}</a></td>
+                    <td>{{ item.title }}</td>
+                    <td class="mono">{{ item.owner or "-" }}</td>
+                    <td>{{ item.due_at | format_ts }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">No overdue checklist items.</div>
+        {% endif %}
+    </div>
+    <div class="card">
+        <h2>Checklist Due in 24h</h2>
+        {% if due_soon_checklist_items %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Campaign</th>
+                    <th>Title</th>
+                    <th>Owner</th>
+                    <th>Due</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in due_soon_checklist_items %}
+                <tr>
+                    <td class="mono"><a href="/campaigns/{{ item.campaign }}">{{ item.campaign }}</a></td>
+                    <td>{{ item.title }}</td>
+                    <td class="mono">{{ item.owner or "-" }}</td>
+                    <td>{{ item.due_at | format_ts }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">No checklist items due in the next 24h.</div>
+        {% endif %}
     </div>
 </div>
 {% endif %}

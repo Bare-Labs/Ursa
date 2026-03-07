@@ -1,11 +1,14 @@
 """Dashboard route — overview of C2 status."""
 
+import time
+
 from fastapi import APIRouter, Request
 
 from major.db import (
     evaluate_campaign_policy_alerts,
     get_events,
     list_approval_requests,
+    list_campaign_checklist,
     list_sessions,
     list_tasks,
 )
@@ -26,6 +29,38 @@ async def dashboard(request: Request):
     policy_recommendations = build_policy_remediation_recommendations(policy_alerts)
     recent_tasks = list_tasks(limit=200)
     recent_events = get_events(limit=200)
+    checklist_items = list_campaign_checklist(limit=5000)
+    now = time.time()
+    overdue_items = []
+    due_soon_items = []
+    for item in checklist_items:
+        if item.get("status") == "done":
+            continue
+        due_at = item.get("due_at")
+        if not due_at:
+            continue
+        if due_at < now:
+            overdue_items.append(item)
+        elif due_at <= now + 24 * 3600:
+            due_soon_items.append(item)
+
+    checklist_by_campaign: dict[str, dict[str, int]] = {}
+    for item in checklist_items:
+        campaign = (item.get("campaign") or "unassigned").strip() or "unassigned"
+        bucket = checklist_by_campaign.setdefault(campaign, {"open": 0, "overdue": 0, "due_soon": 0})
+        if item.get("status") != "done":
+            bucket["open"] += 1
+        due_at = item.get("due_at")
+        if item.get("status") != "done" and due_at:
+            if due_at < now:
+                bucket["overdue"] += 1
+            elif due_at <= now + 24 * 3600:
+                bucket["due_soon"] += 1
+    top_checklist_campaigns = sorted(
+        checklist_by_campaign.items(),
+        key=lambda item: (item[1]["overdue"], item[1]["due_soon"], item[1]["open"]),
+        reverse=True,
+    )[:8]
 
     campaigns: dict[str, dict[str, int]] = {}
     for s in sessions:
@@ -68,6 +103,8 @@ async def dashboard(request: Request):
         "total_sessions": len(sessions),
         "pending_approvals": len(pending_approvals),
         "policy_alert_count": len(policy_alerts),
+        "checklist_overdue_count": len(overdue_items),
+        "checklist_due_soon_count": len(due_soon_items),
         "policy_alerts": policy_alerts[:6],
         "policy_recommendations": policy_recommendations[:6],
         "recent_events": recent_events[:15],
@@ -76,4 +113,7 @@ async def dashboard(request: Request):
         "top_campaigns": top_campaigns,
         "pending_by_risk": pending_by_risk,
         "top_pending_campaigns": top_pending_campaigns,
+        "top_checklist_campaigns": top_checklist_campaigns,
+        "overdue_checklist_items": sorted(overdue_items, key=lambda row: row.get("due_at") or 0)[:12],
+        "due_soon_checklist_items": sorted(due_soon_items, key=lambda row: row.get("due_at") or 0)[:12],
     })

@@ -81,7 +81,46 @@
 
 <div class="card">
     <h2>Campaign Checklist</h2>
+    <form class="shell-form" method="get" action="/campaigns/{{ campaign_name }}">
+        <select name="status">
+            <option value="" {% if not checklist_filters.status %}selected{% endif %}>all statuses</option>
+            <option value="pending" {% if checklist_filters.status == "pending" %}selected{% endif %}>pending</option>
+            <option value="in_progress" {% if checklist_filters.status == "in_progress" %}selected{% endif %}>in_progress</option>
+            <option value="blocked" {% if checklist_filters.status == "blocked" %}selected{% endif %}>blocked</option>
+            <option value="done" {% if checklist_filters.status == "done" %}selected{% endif %}>done</option>
+        </select>
+        <input type="text" name="owner" placeholder="Owner filter" value="{{ checklist_filters.owner }}">
+        <input type="text" name="q" placeholder="Search title/details" value="{{ checklist_filters.q }}">
+        <select name="sort">
+            <option value="created_desc" {% if checklist_filters.sort == "created_desc" %}selected{% endif %}>newest</option>
+            <option value="created_asc" {% if checklist_filters.sort == "created_asc" %}selected{% endif %}>oldest</option>
+            <option value="updated_desc" {% if checklist_filters.sort == "updated_desc" %}selected{% endif %}>recently updated</option>
+            <option value="due_asc" {% if checklist_filters.sort == "due_asc" %}selected{% endif %}>due soon</option>
+            <option value="due_desc" {% if checklist_filters.sort == "due_desc" %}selected{% endif %}>due latest</option>
+        </select>
+        <button type="submit">Apply</button>
+        <a class="filter-btn" href="/campaigns/{{ campaign_name }}">Clear</a>
+    </form>
+
+    <form class="shell-form" method="post" action="/campaigns/{{ campaign_name }}/checklist/bulk">
+        <input type="hidden" name="status_filter" value="{{ checklist_filters.status }}">
+        <input type="hidden" name="owner_filter" value="{{ checklist_filters.owner }}">
+        <input type="hidden" name="q_filter" value="{{ checklist_filters.q }}">
+        <input type="hidden" name="sort_filter" value="{{ checklist_filters.sort }}">
+        <select name="action_status">
+            <option value="in_progress">set filtered to in_progress</option>
+            <option value="blocked">set filtered to blocked</option>
+            <option value="done">set filtered to done</option>
+            <option value="pending">set filtered to pending</option>
+        </select>
+        <button type="submit">Bulk Update</button>
+    </form>
+
     <form class="shell-form" method="post" action="/campaigns/{{ campaign_name }}/checklist">
+        <input type="hidden" name="status_filter" value="{{ checklist_filters.status }}">
+        <input type="hidden" name="owner_filter" value="{{ checklist_filters.owner }}">
+        <input type="hidden" name="q_filter" value="{{ checklist_filters.q }}">
+        <input type="hidden" name="sort_filter" value="{{ checklist_filters.sort }}">
         <input type="text" name="title" placeholder="Checklist item title..." required>
         <input type="text" name="details" placeholder="Details (optional)">
         <input type="text" name="owner" placeholder="Owner">
@@ -107,6 +146,10 @@
                 <td class="mono">{{ c.id }}</td>
                 <td>
                     <form method="post" action="/campaigns/{{ campaign_name }}/checklist/{{ c.id }}/update">
+                        <input type="hidden" name="status_filter" value="{{ checklist_filters.status }}">
+                        <input type="hidden" name="owner_filter" value="{{ checklist_filters.owner }}">
+                        <input type="hidden" name="q_filter" value="{{ checklist_filters.q }}">
+                        <input type="hidden" name="sort_filter" value="{{ checklist_filters.sort }}">
                         <select name="status" onchange="this.form.submit()">
                             <option value="pending" {% if c.status == "pending" %}selected{% endif %}>pending</option>
                             <option value="in_progress" {% if c.status == "in_progress" %}selected{% endif %}>in_progress</option>
@@ -127,6 +170,10 @@
                 </td>
                 <td>
                     <form method="post" action="/campaigns/{{ campaign_name }}/checklist/{{ c.id }}/delete" onsubmit="return confirm('Delete this checklist item?')">
+                        <input type="hidden" name="status_filter" value="{{ checklist_filters.status }}">
+                        <input type="hidden" name="owner_filter" value="{{ checklist_filters.owner }}">
+                        <input type="hidden" name="q_filter" value="{{ checklist_filters.q }}">
+                        <input type="hidden" name="sort_filter" value="{{ checklist_filters.sort }}">
                         <button type="submit" class="btn btn-danger">Delete</button>
                     </form>
                 </td>

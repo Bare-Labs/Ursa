@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -27,6 +28,7 @@ from major.web.app import templates
 
 router = APIRouter(prefix="/campaigns")
 CHECKLIST_STATUSES = {"pending", "in_progress", "blocked", "done"}
+CHECKLIST_SORT_OPTIONS = {"created_desc", "created_asc", "updated_desc", "updated_asc", "due_asc", "due_desc"}
 
 
 def _parse_due_at(value: str) -> float | None:
@@ -37,6 +39,21 @@ def _parse_due_at(value: str) -> float | None:
         return datetime.fromisoformat(text).timestamp()
     except ValueError:
         return None
+
+
+def _campaign_redirect(campaign_name: str, status: str = "", owner: str = "", q: str = "", sort: str = "") -> str:
+    params: dict[str, str] = {}
+    if status:
+        params["status"] = status
+    if owner:
+        params["owner"] = owner
+    if q:
+        params["q"] = q
+    if sort:
+        params["sort"] = sort
+    if params:
+        return f"/campaigns/{campaign_name}?" + urlencode(params)
+    return f"/campaigns/{campaign_name}"
 
 
 @router.get("/")
@@ -83,6 +100,15 @@ async def campaign_list(request: Request):
 
 @router.get("/{campaign_name}")
 async def campaign_detail(request: Request, campaign_name: str):
+    status_filter = str(request.query_params.get("status", "")).strip().lower()
+    owner_filter = str(request.query_params.get("owner", "")).strip()
+    text_filter = str(request.query_params.get("q", "")).strip()
+    sort = str(request.query_params.get("sort", "created_desc")).strip().lower()
+    if status_filter and status_filter not in CHECKLIST_STATUSES:
+        status_filter = ""
+    if sort not in CHECKLIST_SORT_OPTIONS:
+        sort = "created_desc"
+
     sessions = list_sessions(campaign=campaign_name)
     tasks = list_tasks(campaign=campaign_name, limit=150)
     events = get_events(campaign=campaign_name, limit=150)
@@ -92,9 +118,17 @@ async def campaign_detail(request: Request, campaign_name: str):
     recommendations = get_policy_remediation_plan(campaign=campaign_name)
     timeline = get_campaign_timeline(campaign_name, limit=200)
     notes = list_campaign_notes(campaign=campaign_name, limit=200)
-    checklist_items = list_campaign_checklist(campaign=campaign_name, limit=300)
+    checklist_items = list_campaign_checklist(
+        campaign=campaign_name,
+        status=status_filter or None,
+        owner=owner_filter or None,
+        text=text_filter or None,
+        sort=sort,
+        limit=300,
+    )
+    checklist_all = list_campaign_checklist(campaign=campaign_name, limit=1000)
     checklist_counts = {"pending": 0, "in_progress": 0, "blocked": 0, "done": 0}
-    for item in checklist_items:
+    for item in checklist_all:
         st = (item.get("status") or "pending").strip().lower()
         if st not in checklist_counts:
             st = "pending"
@@ -131,6 +165,12 @@ async def campaign_detail(request: Request, campaign_name: str):
             "notes": notes,
             "checklist_items": checklist_items,
             "checklist_counts": checklist_counts,
+            "checklist_filters": {
+                "status": status_filter,
+                "owner": owner_filter,
+                "q": text_filter,
+                "sort": sort,
+            },
             "by_status": by_status,
             "by_task_type": sorted(by_task_type.items(), key=lambda item: item[1], reverse=True)[:8],
             "by_risk": by_risk,
@@ -165,6 +205,10 @@ async def campaign_add_checklist_item(request: Request, campaign_name: str):
     details = str(form.get("details", "")).strip()
     owner = str(form.get("owner", "")).strip()
     due_at = _parse_due_at(str(form.get("due_at", "")))
+    status_filter = str(form.get("status_filter", "")).strip().lower()
+    owner_filter = str(form.get("owner_filter", "")).strip()
+    text_filter = str(form.get("q_filter", "")).strip()
+    sort = str(form.get("sort_filter", "created_desc")).strip().lower()
     if title:
         add_campaign_checklist_item(
             campaign=campaign_name,
@@ -174,13 +218,23 @@ async def campaign_add_checklist_item(request: Request, campaign_name: str):
             due_at=due_at,
         )
     response = Response(status_code=200)
-    response.headers["HX-Redirect"] = f"/campaigns/{campaign_name}"
+    response.headers["HX-Redirect"] = _campaign_redirect(
+        campaign_name,
+        status=status_filter,
+        owner=owner_filter,
+        q=text_filter,
+        sort=sort,
+    )
     return response
 
 
 @router.post("/{campaign_name}/checklist/{item_id}/update")
 async def campaign_update_checklist_item(request: Request, campaign_name: str, item_id: int):
     form = await request.form()
+    status_filter = str(form.get("status_filter", "")).strip().lower()
+    owner_filter = str(form.get("owner_filter", "")).strip()
+    text_filter = str(form.get("q_filter", "")).strip()
+    sort_filter = str(form.get("sort_filter", "created_desc")).strip().lower()
     status = str(form.get("status", "")).strip().lower()
     updates = {}
     if status in CHECKLIST_STATUSES:
@@ -199,15 +253,62 @@ async def campaign_update_checklist_item(request: Request, campaign_name: str, i
     if updates:
         update_campaign_checklist_item(item_id, **updates)
     response = Response(status_code=200)
-    response.headers["HX-Redirect"] = f"/campaigns/{campaign_name}"
+    response.headers["HX-Redirect"] = _campaign_redirect(
+        campaign_name,
+        status=status_filter,
+        owner=owner_filter,
+        q=text_filter,
+        sort=sort_filter,
+    )
     return response
 
 
 @router.post("/{campaign_name}/checklist/{item_id}/delete")
-async def campaign_delete_checklist_item(campaign_name: str, item_id: int):
+async def campaign_delete_checklist_item(request: Request, campaign_name: str, item_id: int):
+    form = await request.form()
+    status_filter = str(form.get("status_filter", "")).strip().lower()
+    owner_filter = str(form.get("owner_filter", "")).strip()
+    text_filter = str(form.get("q_filter", "")).strip()
+    sort_filter = str(form.get("sort_filter", "created_desc")).strip().lower()
     _ = delete_campaign_checklist_item(item_id)
     response = Response(status_code=200)
-    response.headers["HX-Redirect"] = f"/campaigns/{campaign_name}"
+    response.headers["HX-Redirect"] = _campaign_redirect(
+        campaign_name,
+        status=status_filter,
+        owner=owner_filter,
+        q=text_filter,
+        sort=sort_filter,
+    )
+    return response
+
+
+@router.post("/{campaign_name}/checklist/bulk")
+async def campaign_bulk_update_checklist(request: Request, campaign_name: str):
+    form = await request.form()
+    action_status = str(form.get("action_status", "")).strip().lower()
+    status_filter = str(form.get("status_filter", "")).strip().lower()
+    owner_filter = str(form.get("owner_filter", "")).strip()
+    text_filter = str(form.get("q_filter", "")).strip()
+    sort_filter = str(form.get("sort_filter", "created_desc")).strip().lower()
+    if action_status in CHECKLIST_STATUSES:
+        rows = list_campaign_checklist(
+            campaign=campaign_name,
+            status=status_filter or None,
+            owner=owner_filter or None,
+            text=text_filter or None,
+            sort=sort_filter,
+            limit=1000,
+        )
+        for row in rows:
+            update_campaign_checklist_item(int(row["id"]), status=action_status)
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = _campaign_redirect(
+        campaign_name,
+        status=status_filter,
+        owner=owner_filter,
+        q=text_filter,
+        sort=sort_filter,
+    )
     return response
 
 

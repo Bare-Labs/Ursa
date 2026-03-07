@@ -362,6 +362,13 @@ class TestCampaignTimeline:
         assert any(r["ref_id"] == task_id for r in rows)
         assert any(r["ref_id"] == approval_id for r in rows)
 
+    def test_get_campaign_timeline_includes_checklist_history(self, tmp_db):
+        item_id = db.add_campaign_checklist_item("ALPHA", "prep infra", owner="ops")
+        db.update_campaign_checklist_item(item_id, status="in_progress")
+        rows = db.get_campaign_timeline("ALPHA", limit=50)
+        assert any(r["kind"] == "checklist" for r in rows)
+        assert any(r["kind"] == "checklist" and r["ref_id"] == str(item_id) for r in rows)
+
 
 class TestCampaignNotes:
 
@@ -401,6 +408,14 @@ class TestCampaignChecklist:
         assert len(rows) == 1
         assert rows[0]["id"] == item_id
 
+    def test_filter_checklist_by_owner_and_text(self, tmp_db):
+        db.add_campaign_checklist_item("ALPHA", "prep phishing infra", details="sendgrid tenant", owner="alice")
+        db.add_campaign_checklist_item("ALPHA", "credential staging", details="hashcat", owner="bob")
+        rows = db.list_campaign_checklist(campaign="ALPHA", owner="alice", text="sendgrid", limit=10)
+        assert len(rows) == 1
+        assert rows[0]["owner"] == "alice"
+        assert "sendgrid" in rows[0]["details"]
+
     def test_update_and_delete_checklist_item(self, tmp_db):
         item_id = db.add_campaign_checklist_item("ALPHA", "collect creds")
         assert db.update_campaign_checklist_item(
@@ -418,3 +433,13 @@ class TestCampaignChecklist:
         assert db.delete_campaign_checklist_item(item_id) is True
         rows_after = db.list_campaign_checklist(campaign="ALPHA", limit=10)
         assert rows_after == []
+
+    def test_checklist_history_records_changes_and_delete(self, tmp_db):
+        item_id = db.add_campaign_checklist_item("ALPHA", "escalate privileges")
+        db.update_campaign_checklist_item(item_id, status="done")
+        db.delete_campaign_checklist_item(item_id)
+        history = db.list_campaign_checklist_history("ALPHA", limit=10)
+        actions = [row["action"] for row in history]
+        assert "created" in actions
+        assert "status_changed" in actions
+        assert "deleted" in actions

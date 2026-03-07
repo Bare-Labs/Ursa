@@ -21,6 +21,8 @@ Tools:
         - ursa_campaign_add_checklist_item — Add campaign checklist item
         - ursa_campaign_update_checklist_item — Update checklist item
         - ursa_campaign_delete_checklist_item — Delete checklist item
+        - ursa_campaign_bulk_update_checklist — Bulk status update by checklist filter
+        - ursa_campaign_checklist_alerts — Checklist due/overdue alert view
         - ursa_campaign_handoff — Generate handoff brief
         - ursa_campaign_handoff_report — Export handoff report
         - ursa_kill_session  — Kill a session
@@ -943,7 +945,14 @@ def ursa_campaign_notes(campaign: str, limit: int = 30) -> str:
 
 
 @mcp_server.tool()
-def ursa_campaign_checklist(campaign: str, status: str | None = None, limit: int = 50) -> str:
+def ursa_campaign_checklist(
+    campaign: str,
+    status: str | None = None,
+    owner: str | None = None,
+    query: str | None = None,
+    sort: str = "created_desc",
+    limit: int = 50,
+) -> str:
     """List campaign checklist items."""
     name = campaign.strip()
     if not name:
@@ -951,9 +960,15 @@ def ursa_campaign_checklist(campaign: str, status: str | None = None, limit: int
     normalized_status = (status or "").strip().lower() or None
     if normalized_status and normalized_status not in {"pending", "in_progress", "blocked", "done"}:
         return "status must be one of: pending, in_progress, blocked, done."
+    normalized_sort = sort.strip().lower()
+    if normalized_sort not in {"created_desc", "created_asc", "updated_desc", "updated_asc", "due_asc", "due_desc"}:
+        return "sort must be one of: created_desc, created_asc, updated_desc, updated_asc, due_asc, due_desc."
     rows = list_campaign_checklist(
         campaign=name,
         status=normalized_status,
+        owner=(owner or "").strip() or None,
+        text=(query or "").strip() or None,
+        sort=normalized_sort,
         limit=max(1, min(limit, 500)),
     )
     if not rows:
@@ -1040,6 +1055,100 @@ def ursa_campaign_delete_checklist_item(item_id: int) -> str:
     """Delete one checklist item by ID."""
     deleted = delete_campaign_checklist_item(item_id)
     return f"Deleted checklist item {item_id}." if deleted else f"Checklist item {item_id} not found."
+
+
+@mcp_server.tool()
+def ursa_campaign_bulk_update_checklist(
+    campaign: str,
+    status: str,
+    from_status: str = "",
+    owner: str = "",
+    query: str = "",
+    limit: int = 500,
+) -> str:
+    """Bulk-update checklist status for matching campaign items."""
+    name = campaign.strip()
+    target = status.strip().lower()
+    if not name:
+        return "Campaign is required."
+    if target not in {"pending", "in_progress", "blocked", "done"}:
+        return "status must be one of: pending, in_progress, blocked, done."
+    normalized_from = from_status.strip().lower() or None
+    if normalized_from and normalized_from not in {"pending", "in_progress", "blocked", "done"}:
+        return "from_status must be one of: pending, in_progress, blocked, done."
+
+    rows = list_campaign_checklist(
+        campaign=name,
+        status=normalized_from,
+        owner=owner.strip() or None,
+        text=query.strip() or None,
+        limit=max(1, min(limit, 5000)),
+    )
+    changed = 0
+    for row in rows:
+        if row.get("status") == target:
+            continue
+        if update_campaign_checklist_item(int(row["id"]), status=target):
+            changed += 1
+    return (
+        f"Checklist bulk update complete.\n"
+        f"Campaign: {name}\n"
+        f"Matched: {len(rows)}\n"
+        f"Updated: {changed}\n"
+        f"Target status: {target}"
+    )
+
+
+@mcp_server.tool()
+def ursa_campaign_checklist_alerts(
+    campaign: str | None = None,
+    due_within_hours: int = 24,
+    limit: int = 50,
+) -> str:
+    """List overdue and near-due checklist items."""
+    name = (campaign or "").strip() or None
+    window_hours = max(1, min(due_within_hours, 168))
+    rows = list_campaign_checklist(campaign=name, limit=5000)
+    now = time.time()
+    due_window = now + window_hours * 3600
+    overdue = []
+    due_soon = []
+    for row in rows:
+        if row.get("status") == "done":
+            continue
+        due_at = row.get("due_at")
+        if not due_at:
+            continue
+        if due_at < now:
+            overdue.append(row)
+        elif due_at <= due_window:
+            due_soon.append(row)
+    overdue_sorted = sorted(overdue, key=lambda item: item.get("due_at") or 0)[: max(1, min(limit, 200))]
+    due_soon_sorted = sorted(due_soon, key=lambda item: item.get("due_at") or 0)[: max(1, min(limit, 200))]
+    scope = name or "all campaigns"
+    lines = [
+        f"CHECKLIST ALERTS ({scope})",
+        "=" * 80,
+        f"Overdue: {len(overdue)}",
+        f"Due in <= {window_hours}h: {len(due_soon)}",
+    ]
+    if overdue_sorted:
+        lines.extend(["", "Overdue:"])
+        for row in overdue_sorted:
+            lines.append(
+                f"  [{row['campaign']}] {row['id']} {row['title']} "
+                f"owner={row.get('owner') or '-'} due={_format_time(row['due_at'])} status={row['status']}"
+            )
+    if due_soon_sorted:
+        lines.extend(["", f"Due within {window_hours}h:"])
+        for row in due_soon_sorted:
+            lines.append(
+                f"  [{row['campaign']}] {row['id']} {row['title']} "
+                f"owner={row.get('owner') or '-'} due={_format_time(row['due_at'])} status={row['status']}"
+            )
+    if not overdue_sorted and not due_soon_sorted:
+        lines.extend(["", "No checklist due alerts in scope."])
+    return "\n".join(lines)
 
 
 @mcp_server.tool()
