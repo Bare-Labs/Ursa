@@ -146,6 +146,18 @@ def init_db():
             note TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS campaign_checklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            title TEXT NOT NULL,
+            details TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            owner TEXT DEFAULT '',
+            due_at REAL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -157,6 +169,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_policy_updated_at ON campaign_policies(updated_at);
         CREATE INDEX IF NOT EXISTS idx_campaign_notes_campaign ON campaign_notes(campaign);
         CREATE INDEX IF NOT EXISTS idx_campaign_notes_created_at ON campaign_notes(created_at);
+        CREATE INDEX IF NOT EXISTS idx_campaign_checklist_campaign ON campaign_checklist(campaign);
+        CREATE INDEX IF NOT EXISTS idx_campaign_checklist_status ON campaign_checklist(status);
     """)
     _ensure_sessions_columns(db)
     _ensure_campaign_policy_columns(db)
@@ -934,6 +948,75 @@ def delete_campaign_note(note_id):
     """Delete one campaign note by ID."""
     db = get_db()
     db.execute("DELETE FROM campaign_notes WHERE id=?", (note_id,))
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
+
+
+def add_campaign_checklist_item(
+    campaign,
+    title,
+    details="",
+    owner="",
+    due_at=None,
+):
+    """Create checklist item for a campaign."""
+    db = get_db()
+    now = time.time()
+    db.execute(
+        """
+        INSERT INTO campaign_checklist (campaign, created_at, updated_at, title, details, status, owner, due_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (campaign, now, now, title, details, owner, due_at),
+    )
+    item_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    db.commit()
+    db.close()
+    return int(item_id)
+
+
+def list_campaign_checklist(campaign=None, status=None, limit=200):
+    """List checklist items, optionally filtered."""
+    db = get_db()
+    query = "SELECT * FROM campaign_checklist WHERE 1=1"
+    params = []
+    if campaign:
+        query += " AND campaign=?"
+        params.append(campaign)
+    if status:
+        query += " AND status=?"
+        params.append(status)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = db.execute(query, params).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+
+def update_campaign_checklist_item(item_id, **kwargs):
+    """Update checklist item fields."""
+    allowed = {"title", "details", "status", "owner", "due_at"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    updates["updated_at"] = time.time()
+
+    db = get_db()
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    params = list(updates.values()) + [item_id]
+    db.execute(f"UPDATE campaign_checklist SET {set_clause} WHERE id=?", params)
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
+
+
+def delete_campaign_checklist_item(item_id):
+    """Delete checklist item."""
+    db = get_db()
+    db.execute("DELETE FROM campaign_checklist WHERE id=?", (item_id,))
     changed = db.total_changes
     db.commit()
     db.close()

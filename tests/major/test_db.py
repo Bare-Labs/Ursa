@@ -380,3 +380,41 @@ class TestCampaignNotes:
         assert db.delete_campaign_note(note_id) is True
         notes_after = db.list_campaign_notes(campaign="ALPHA", limit=10)
         assert all(n["id"] != note_id for n in notes_after)
+
+
+class TestCampaignChecklist:
+
+    def test_add_and_list_checklist_items(self, tmp_db):
+        db.add_campaign_checklist_item("ALPHA", "prep infra", details="terraform", owner="alice")
+        db.add_campaign_checklist_item("ALPHA", "run validation", owner="bob")
+        rows = db.list_campaign_checklist(campaign="ALPHA", limit=10)
+        assert len(rows) == 2
+        assert rows[0]["title"] == "run validation"
+        assert rows[1]["title"] == "prep infra"
+        assert rows[1]["details"] == "terraform"
+
+    def test_filter_checklist_by_status(self, tmp_db):
+        item_id = db.add_campaign_checklist_item("ALPHA", "stage payload")
+        db.add_campaign_checklist_item("ALPHA", "schedule op")
+        assert db.update_campaign_checklist_item(item_id, status="done") is True
+        rows = db.list_campaign_checklist(campaign="ALPHA", status="done", limit=10)
+        assert len(rows) == 1
+        assert rows[0]["id"] == item_id
+
+    def test_update_and_delete_checklist_item(self, tmp_db):
+        item_id = db.add_campaign_checklist_item("ALPHA", "collect creds")
+        assert db.update_campaign_checklist_item(
+            item_id,
+            title="collect credentials",
+            owner="charlie",
+            details="domain admin first",
+            due_at=time.time() + 600,
+            status="in_progress",
+        )
+        rows = db.list_campaign_checklist(campaign="ALPHA", limit=10)
+        assert rows[0]["title"] == "collect credentials"
+        assert rows[0]["owner"] == "charlie"
+        assert rows[0]["status"] == "in_progress"
+        assert db.delete_campaign_checklist_item(item_id) is True
+        rows_after = db.list_campaign_checklist(campaign="ALPHA", limit=10)
+        assert rows_after == []

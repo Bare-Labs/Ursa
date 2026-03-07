@@ -16,6 +16,13 @@ Tools:
         - ursa_campaign_timeline — Get campaign timeline
         - ursa_campaign_add_note — Add campaign note
         - ursa_campaign_notes — List campaign notes
+        - ursa_campaign_delete_note — Delete campaign note
+        - ursa_campaign_checklist — List campaign checklist items
+        - ursa_campaign_add_checklist_item — Add campaign checklist item
+        - ursa_campaign_update_checklist_item — Update checklist item
+        - ursa_campaign_delete_checklist_item — Delete checklist item
+        - ursa_campaign_handoff — Generate handoff brief
+        - ursa_campaign_handoff_report — Export handoff report
         - ursa_kill_session  — Kill a session
 
     Tasking:
@@ -66,7 +73,9 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from major.db import (  # noqa: E402
+    add_campaign_checklist_item,
     add_campaign_note,
+    delete_campaign_checklist_item,
     delete_campaign_note,
     delete_campaign_policy,
     evaluate_campaign_policy_alerts,
@@ -77,11 +86,13 @@ from major.db import (  # noqa: E402
     get_task,
     kill_session,
     list_approval_requests,
+    list_campaign_checklist,
     list_campaign_notes,
     list_campaign_policies,
     list_files,
     list_sessions,
     list_tasks,
+    update_campaign_checklist_item,
     update_session_info,
     upsert_campaign_policy,
     verify_immutable_audit_chain,
@@ -792,12 +803,14 @@ def ursa_campaign_info(campaign: str) -> str:
     events = get_events(campaign=campaign_name, limit=200)
     approvals = list_approval_requests(status="pending", campaign=campaign_name, limit=200)
     notes = list_campaign_notes(campaign=campaign_name, limit=200)
-    if not sessions and not tasks and not events and not approvals and not notes:
+    checklist = list_campaign_checklist(campaign=campaign_name, limit=300)
+    if not sessions and not tasks and not events and not approvals and not notes and not checklist:
         return f"No activity found for campaign '{campaign_name}'."
 
     by_status: dict[str, int] = {}
     by_task_type: dict[str, int] = {}
     by_risk: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    checklist_counts = {"pending": 0, "in_progress": 0, "blocked": 0, "done": 0}
     for s in sessions:
         status = s.get("status", "unknown")
         by_status[status] = by_status.get(status, 0) + 1
@@ -808,6 +821,11 @@ def ursa_campaign_info(campaign: str) -> str:
         risk = (a.get("risk_level") or "").lower()
         if risk in by_risk:
             by_risk[risk] += 1
+    for row in checklist:
+        st = (row.get("status") or "pending").strip().lower()
+        if st not in checklist_counts:
+            st = "pending"
+        checklist_counts[st] += 1
 
     lines = [
         f"CAMPAIGN: {campaign_name}",
@@ -817,6 +835,7 @@ def ursa_campaign_info(campaign: str) -> str:
         f"Events (recent):   {len(events)}",
         f"Pending approvals: {len(approvals)}",
         f"Notes:             {len(notes)}",
+        f"Checklist items:   {len(checklist)}",
         "",
         "Session Status:",
     ]
@@ -840,6 +859,16 @@ def ursa_campaign_info(campaign: str) -> str:
             f"  high:     {by_risk['high']}",
             f"  medium:   {by_risk['medium']}",
             f"  low:      {by_risk['low']}",
+        ]
+    )
+    lines.extend(
+        [
+            "",
+            "Checklist Status:",
+            f"  pending:     {checklist_counts['pending']}",
+            f"  in_progress: {checklist_counts['in_progress']}",
+            f"  blocked:     {checklist_counts['blocked']}",
+            f"  done:        {checklist_counts['done']}",
         ]
     )
     if sessions:
@@ -914,6 +943,106 @@ def ursa_campaign_notes(campaign: str, limit: int = 30) -> str:
 
 
 @mcp_server.tool()
+def ursa_campaign_checklist(campaign: str, status: str | None = None, limit: int = 50) -> str:
+    """List campaign checklist items."""
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    normalized_status = (status or "").strip().lower() or None
+    if normalized_status and normalized_status not in {"pending", "in_progress", "blocked", "done"}:
+        return "status must be one of: pending, in_progress, blocked, done."
+    rows = list_campaign_checklist(
+        campaign=name,
+        status=normalized_status,
+        limit=max(1, min(limit, 500)),
+    )
+    if not rows:
+        return f"No checklist items for campaign '{name}'."
+    lines = [f"CAMPAIGN CHECKLIST: {name}", "=" * 90]
+    for row in rows:
+        due = _format_time(row["due_at"]) if row.get("due_at") else "-"
+        lines.append(
+            f"{row['id']:<6} {row['status']:<12} owner={row.get('owner') or '-':<16} "
+            f"due={due:<19} {row['title']}"
+        )
+        if row.get("details"):
+            lines.append(f"       details: {row['details']}")
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_add_checklist_item(
+    campaign: str,
+    title: str,
+    details: str = "",
+    owner: str = "",
+    due_at: str = "",
+) -> str:
+    """Add a checklist item to a campaign."""
+    name = campaign.strip()
+    item_title = title.strip()
+    if not name:
+        return "Campaign is required."
+    if not item_title:
+        return "title is required."
+    due_ts = None
+    due_text = due_at.strip()
+    if due_text:
+        try:
+            due_ts = datetime.fromisoformat(due_text).timestamp()
+        except ValueError:
+            return "due_at must be ISO date/datetime (example: 2026-03-08T14:30)."
+    item_id = add_campaign_checklist_item(
+        campaign=name,
+        title=item_title,
+        details=details.strip(),
+        owner=owner.strip(),
+        due_at=due_ts,
+    )
+    return f"Added checklist item {item_id} to campaign {name}."
+
+
+@mcp_server.tool()
+def ursa_campaign_update_checklist_item(
+    item_id: int,
+    title: str = "",
+    details: str = "",
+    owner: str = "",
+    due_at: str = "",
+    status: str = "",
+) -> str:
+    """Update fields for one checklist item."""
+    updates: dict[str, object] = {}
+    if title.strip():
+        updates["title"] = title.strip()
+    if details.strip():
+        updates["details"] = details.strip()
+    if owner.strip():
+        updates["owner"] = owner.strip()
+    if status.strip():
+        normalized = status.strip().lower()
+        if normalized not in {"pending", "in_progress", "blocked", "done"}:
+            return "status must be one of: pending, in_progress, blocked, done."
+        updates["status"] = normalized
+    if due_at.strip():
+        try:
+            updates["due_at"] = datetime.fromisoformat(due_at.strip()).timestamp()
+        except ValueError:
+            return "due_at must be ISO date/datetime (example: 2026-03-08T14:30)."
+    if not updates:
+        return "No updates supplied."
+    changed = update_campaign_checklist_item(item_id, **updates)
+    return f"Updated checklist item {item_id}." if changed else f"Checklist item {item_id} not found."
+
+
+@mcp_server.tool()
+def ursa_campaign_delete_checklist_item(item_id: int) -> str:
+    """Delete one checklist item by ID."""
+    deleted = delete_campaign_checklist_item(item_id)
+    return f"Deleted checklist item {item_id}." if deleted else f"Checklist item {item_id} not found."
+
+
+@mcp_server.tool()
 def ursa_campaign_handoff(campaign: str) -> str:
     """
     Generate a concise handoff brief for a campaign.
@@ -921,48 +1050,180 @@ def ursa_campaign_handoff(campaign: str) -> str:
     name = campaign.strip()
     if not name:
         return "Campaign is required."
-    sessions = list_sessions(campaign=name)
-    tasks = list_tasks(campaign=name, limit=300)
-    events = get_events(campaign=name, limit=300)
-    approvals = list_approval_requests(status="pending", campaign=name, limit=300)
-    notes = list_campaign_notes(campaign=name, limit=50)
-    alerts = evaluate_campaign_policy_alerts(campaign=name)
+    payload = _build_campaign_handoff_payload(name)
+    return _render_campaign_handoff_text(payload)
+
+
+@mcp_server.tool()
+def ursa_campaign_handoff_report(campaign: str, output_format: str = "md") -> str:
+    """
+    Export campaign handoff report to disk as Markdown or JSON.
+    """
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    fmt = output_format.strip().lower()
+    if fmt not in {"md", "json"}:
+        return "output_format must be 'md' or 'json'."
+
+    payload = _build_campaign_handoff_payload(name)
+    reports_dir = PROJECT_ROOT / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in name)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "json":
+        out_path = reports_dir / f"campaign_handoff_{safe}_{ts}.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    else:
+        out_path = reports_dir / f"campaign_handoff_{safe}_{ts}.md"
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(_render_campaign_handoff_markdown(payload))
+
+    return f"Campaign handoff report exported.\nPath: {out_path}"
+
+
+def _build_campaign_handoff_payload(campaign: str) -> dict:
+    sessions = list_sessions(campaign=campaign)
+    tasks = list_tasks(campaign=campaign, limit=300)
+    events = get_events(campaign=campaign, limit=300)
+    approvals = list_approval_requests(status="pending", campaign=campaign, limit=300)
+    notes = list_campaign_notes(campaign=campaign, limit=50)
+    checklist = list_campaign_checklist(campaign=campaign, limit=100)
+    alerts = evaluate_campaign_policy_alerts(campaign=campaign)
+    checklist_open = [item for item in checklist if item.get("status") != "done"]
 
     by_status: dict[str, int] = {}
     for s in sessions:
         st = s.get("status", "unknown")
         by_status[st] = by_status.get(st, 0) + 1
 
+    return {
+        "campaign": campaign,
+        "generated_at": datetime.now().isoformat(),
+        "counts": {
+            "sessions": len(sessions),
+            "tasks": len(tasks),
+            "events": len(events),
+            "pending_approvals": len(approvals),
+            "policy_alerts": len(alerts),
+            "notes": len(notes),
+            "checklist_items": len(checklist),
+            "checklist_open": len(checklist_open),
+        },
+        "session_status": by_status,
+        "pending_approvals": approvals[:10],
+        "alerts": alerts[:10],
+        "notes": notes[:10],
+        "checklist": checklist[:20],
+    }
+
+
+def _render_campaign_handoff_text(payload: dict) -> str:
+    name = payload["campaign"]
+    counts = payload["counts"]
     lines = [
         f"HANDOFF BRIEF: {name}",
         "=" * 60,
-        f"Sessions: {len(sessions)}  Tasks: {len(tasks)}  Events: {len(events)}",
-        f"Pending Approvals: {len(approvals)}  Policy Alerts: {len(alerts)}",
+        f"Sessions: {counts['sessions']}  Tasks: {counts['tasks']}  Events: {counts['events']}",
+        f"Pending Approvals: {counts['pending_approvals']}  Policy Alerts: {counts['policy_alerts']}",
+        f"Checklist: {counts['checklist_open']}/{counts['checklist_items']} open",
         "",
         "Session Status:",
     ]
-    for key, count in sorted(by_status.items()):
+    for key, count in sorted(payload["session_status"].items()):
         lines.append(f"  {key}: {count}")
 
+    approvals = payload["pending_approvals"]
     if approvals:
         lines.extend(["", "Top Pending Approvals:"])
-        for a in approvals[:10]:
+        for a in approvals:
             lines.append(
                 f"  {a['id']} risk={a['risk_level']} action={a['action']} session={a.get('session_id') or '-'}"
             )
 
+    alerts = payload["alerts"]
     if alerts:
         lines.extend(["", "Active Policy Alerts:"])
-        for a in alerts[:10]:
-            lines.append(
-                f"  {a['metric']} {a['value']}>{a['threshold']} severity={a['severity']}"
-            )
+        for a in alerts:
+            lines.append(f"  {a['metric']} {a['value']}>{a['threshold']} severity={a['severity']}")
 
+    notes = payload["notes"]
     if notes:
         lines.extend(["", "Recent Notes:"])
-        for n in notes[:10]:
+        for n in notes:
             lines.append(f"  [{_format_time(n['created_at'])}] {n['author']}: {n['note']}")
+    checklist = payload["checklist"]
+    if checklist:
+        lines.extend(["", "Checklist:"])
+        for item in checklist:
+            due = _format_time(item["due_at"]) if item.get("due_at") else "-"
+            lines.append(
+                f"  {item['id']} [{item['status']}] {item['title']} "
+                f"owner={item.get('owner') or '-'} due={due}"
+            )
+    return "\n".join(lines)
 
+
+def _render_campaign_handoff_markdown(payload: dict) -> str:
+    name = payload["campaign"]
+    counts = payload["counts"]
+    lines = [
+        f"# Campaign Handoff: {name}",
+        "",
+        f"Generated: {payload['generated_at']}",
+        "",
+        "## Summary",
+        f"- Sessions: {counts['sessions']}",
+        f"- Tasks (recent): {counts['tasks']}",
+        f"- Events (recent): {counts['events']}",
+        f"- Pending approvals: {counts['pending_approvals']}",
+        f"- Policy alerts: {counts['policy_alerts']}",
+        f"- Notes: {counts['notes']}",
+        f"- Checklist items: {counts['checklist_items']}",
+        f"- Open checklist: {counts['checklist_open']}",
+        "",
+        "## Session Status",
+    ]
+    for key, count in sorted(payload["session_status"].items()):
+        lines.append(f"- {key}: {count}")
+
+    lines.extend(["", "## Pending Approvals"])
+    if payload["pending_approvals"]:
+        for a in payload["pending_approvals"]:
+            lines.append(
+                f"- `{a['id']}` risk={a['risk_level']} action={a['action']} session={a.get('session_id') or '-'}"
+            )
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Active Policy Alerts"])
+    if payload["alerts"]:
+        for a in payload["alerts"]:
+            lines.append(f"- {a['metric']}: {a['value']} > {a['threshold']} ({a['severity']})")
+    else:
+        lines.append("- None")
+
+    lines.extend(["", "## Recent Notes"])
+    if payload["notes"]:
+        for n in payload["notes"]:
+            lines.append(f"- [{_format_time(n['created_at'])}] **{n['author']}**: {n['note']}")
+    else:
+        lines.append("- None")
+    lines.extend(["", "## Checklist"])
+    if payload["checklist"]:
+        for item in payload["checklist"]:
+            due = _format_time(item["due_at"]) if item.get("due_at") else "-"
+            lines.append(
+                f"- `{item['id']}` [{item['status']}] {item['title']} "
+                f"(owner={item.get('owner') or '-'}, due={due})"
+            )
+            if item.get("details"):
+                lines.append(f"  - details: {item['details']}")
+    else:
+        lines.append("- None")
+    lines.append("")
     return "\n".join(lines)
 
 

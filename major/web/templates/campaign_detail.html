@@ -7,6 +7,10 @@
         <a href="/campaigns/" style="color: var(--text-secondary)">Campaigns</a> /
         <span class="mono">{{ campaign_name }}</span>
     </h1>
+    <div class="filter-group">
+        <a class="filter-btn" href="/campaigns/{{ campaign_name }}/handoff?format=md">Handoff MD</a>
+        <a class="filter-btn" href="/campaigns/{{ campaign_name }}/handoff?format=json">Handoff JSON</a>
+    </div>
 </div>
 
 <div class="stats-grid">
@@ -31,6 +35,10 @@
             {{ alerts|length }}
         </div>
         <div class="stat-label">Policy Alerts</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ checklist_counts.pending + checklist_counts.in_progress + checklist_counts.blocked }}</div>
+        <div class="stat-label">Open Checklist</div>
     </div>
 </div>
 
@@ -68,6 +76,66 @@
     </table>
 {% else %}
 <div class="empty-state">No notes yet.</div>
+{% endif %}
+</div>
+
+<div class="card">
+    <h2>Campaign Checklist</h2>
+    <form class="shell-form" method="post" action="/campaigns/{{ campaign_name }}/checklist">
+        <input type="text" name="title" placeholder="Checklist item title..." required>
+        <input type="text" name="details" placeholder="Details (optional)">
+        <input type="text" name="owner" placeholder="Owner">
+        <input type="datetime-local" name="due_at">
+        <button type="submit">Add Item</button>
+    </form>
+{% if checklist_items %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Title</th>
+                <th>Owner</th>
+                <th>Due</th>
+                <th></th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in checklist_items[:100] %}
+            <tr>
+                <td class="mono">{{ c.id }}</td>
+                <td>
+                    <form method="post" action="/campaigns/{{ campaign_name }}/checklist/{{ c.id }}/update">
+                        <select name="status" onchange="this.form.submit()">
+                            <option value="pending" {% if c.status == "pending" %}selected{% endif %}>pending</option>
+                            <option value="in_progress" {% if c.status == "in_progress" %}selected{% endif %}>in_progress</option>
+                            <option value="blocked" {% if c.status == "blocked" %}selected{% endif %}>blocked</option>
+                            <option value="done" {% if c.status == "done" %}selected{% endif %}>done</option>
+                        </select>
+                    </form>
+                </td>
+                <td>{{ c.title }}</td>
+                <td class="mono">{{ c.owner or "-" }}</td>
+                <td>{% if c.due_at %}{{ c.due_at | format_ts }}{% else %}-{% endif %}</td>
+                <td>
+                    {% if c.details %}
+                    <span class="mono">{{ c.details }}</span>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                <td>
+                    <form method="post" action="/campaigns/{{ campaign_name }}/checklist/{{ c.id }}/delete" onsubmit="return confirm('Delete this checklist item?')">
+                        <button type="submit" class="btn btn-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <div class="empty-state">No checklist items yet.</div>
 {% endif %}
 </div>
 

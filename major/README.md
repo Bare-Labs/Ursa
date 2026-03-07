@@ -74,7 +74,12 @@ When accessed via MCP (through the root `server.py`), operators get these tools:
 - `ursa_campaign_add_note` — Add campaign operator note
 - `ursa_campaign_notes` — List recent campaign notes
 - `ursa_campaign_delete_note` — Delete campaign note by ID
+- `ursa_campaign_checklist` — List campaign checklist items
+- `ursa_campaign_add_checklist_item` — Add a campaign checklist item
+- `ursa_campaign_update_checklist_item` — Update checklist title/details/owner/due/status
+- `ursa_campaign_delete_checklist_item` — Delete campaign checklist item by ID
 - `ursa_campaign_handoff` — Generate campaign handoff brief
+- `ursa_campaign_handoff_report` — Export campaign handoff report (MD/JSON)
 - `ursa_kill_session` — Terminate a session
 
 **Tasking:**
