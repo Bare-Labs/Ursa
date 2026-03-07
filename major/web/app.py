@@ -86,6 +86,7 @@ templates.env.filters["filesizeformat"] = filesizeformat
 # -- Register Routers --
 
 from major.web.routes import (  # noqa: E402
+    campaigns,
     dashboard,
     events,
     files,
@@ -96,6 +97,7 @@ from major.web.routes import (  # noqa: E402
 )
 
 app.include_router(dashboard.router)
+app.include_router(campaigns.router)
 app.include_router(sessions.router)
 app.include_router(tasks.router)
 app.include_router(files.router)

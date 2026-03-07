@@ -127,6 +127,16 @@ def init_db():
             event_hash TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS campaign_policies (
+            campaign TEXT PRIMARY KEY,
+            max_pending_total INTEGER DEFAULT 20,
+            max_pending_high INTEGER DEFAULT 10,
+            max_pending_critical INTEGER DEFAULT 2,
+            updated_at REAL NOT NULL,
+            updated_by TEXT DEFAULT 'operator',
+            note TEXT DEFAULT ''
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -135,6 +145,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_approvals_status ON approval_requests(status);
         CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approval_requests(created_at);
         CREATE INDEX IF NOT EXISTS idx_immutable_timestamp ON immutable_audit(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_policy_updated_at ON campaign_policies(updated_at);
     """)
     _ensure_sessions_columns(db)
     db.commit()
@@ -497,8 +508,8 @@ def get_approval_request(approval_id):
     return dict(row) if row else None
 
 
-def list_approval_requests(status=None, campaign=None, tag=None, limit=50):
-    """List approval requests, optionally filtered by status/campaign/tag."""
+def list_approval_requests(status=None, campaign=None, tag=None, risk_level=None, limit=50):
+    """List approval requests, optionally filtered by status/campaign/tag/risk."""
     db = get_db()
     query = """
         SELECT a.*, s.campaign AS campaign, s.tags AS session_tags
@@ -516,6 +527,9 @@ def list_approval_requests(status=None, campaign=None, tag=None, limit=50):
     if tag:
         query += " AND s.tags LIKE ?"
         params.append(f"%{tag}%")
+    if risk_level:
+        query += " AND a.risk_level=?"
+        params.append(risk_level)
     query += " ORDER BY a.created_at DESC LIMIT ?"
     params.append(limit)
     rows = db.execute(query, params).fetchall()
@@ -667,6 +681,115 @@ def verify_immutable_audit_chain():
         prev_hash = row["event_hash"]
         checked += 1
     return {"ok": True, "checked": checked}
+
+
+def upsert_campaign_policy(
+    campaign,
+    max_pending_total=20,
+    max_pending_high=10,
+    max_pending_critical=2,
+    updated_by="operator",
+    note="",
+):
+    """Create or update a campaign governance policy threshold set."""
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO campaign_policies (
+            campaign, max_pending_total, max_pending_high, max_pending_critical,
+            updated_at, updated_by, note
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(campaign) DO UPDATE SET
+            max_pending_total=excluded.max_pending_total,
+            max_pending_high=excluded.max_pending_high,
+            max_pending_critical=excluded.max_pending_critical,
+            updated_at=excluded.updated_at,
+            updated_by=excluded.updated_by,
+            note=excluded.note
+        """,
+        (
+            campaign,
+            max_pending_total,
+            max_pending_high,
+            max_pending_critical,
+            time.time(),
+            updated_by,
+            note,
+        ),
+    )
+    db.commit()
+    db.close()
+    return get_campaign_policy(campaign)
+
+
+def get_campaign_policy(campaign):
+    """Fetch one campaign policy."""
+    db = get_db()
+    row = db.execute("SELECT * FROM campaign_policies WHERE campaign=?", (campaign,)).fetchone()
+    db.close()
+    return dict(row) if row else None
+
+
+def list_campaign_policies():
+    """List all campaign policies."""
+    db = get_db()
+    rows = db.execute("SELECT * FROM campaign_policies ORDER BY campaign ASC").fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+
+def delete_campaign_policy(campaign):
+    """Delete a campaign policy by campaign name."""
+    db = get_db()
+    db.execute("DELETE FROM campaign_policies WHERE campaign=?", (campaign,))
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
+
+
+def evaluate_campaign_policy_alerts(campaign=None):
+    """Evaluate policy threshold breaches for pending approvals."""
+    policies = list_campaign_policies()
+    if campaign:
+        policies = [p for p in policies if p["campaign"] == campaign]
+    if not policies:
+        return []
+
+    pending = list_approval_requests(status="pending", limit=10000)
+    counts: dict[str, dict[str, int]] = {}
+    for row in pending:
+        name = (row.get("campaign") or "unassigned").strip() or "unassigned"
+        info = counts.setdefault(name, {"total": 0, "high": 0, "critical": 0})
+        info["total"] += 1
+        risk = (row.get("risk_level") or "").lower()
+        if risk == "high":
+            info["high"] += 1
+        elif risk == "critical":
+            info["critical"] += 1
+
+    alerts = []
+    for policy in policies:
+        name = policy["campaign"]
+        c = counts.get(name, {"total": 0, "high": 0, "critical": 0})
+        checks = [
+            ("total", c["total"], int(policy["max_pending_total"]), "warning"),
+            ("high", c["high"], int(policy["max_pending_high"]), "warning"),
+            ("critical", c["critical"], int(policy["max_pending_critical"]), "critical"),
+        ]
+        for metric, value, threshold, severity in checks:
+            if value > threshold:
+                alerts.append(
+                    {
+                        "campaign": name,
+                        "metric": metric,
+                        "value": value,
+                        "threshold": threshold,
+                        "severity": severity,
+                    }
+                )
+    return alerts
 
 
 # Initialize DB on import

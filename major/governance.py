@@ -11,6 +11,7 @@ from major.db import (
     append_immutable_audit_event,
     create_approval_request,
     create_task,
+    evaluate_campaign_policy_alerts,
     get_approval_request,
     list_approval_requests,
     resolve_approval_request,
@@ -330,6 +331,7 @@ def process_bulk_approval_decisions(
     note: str = "",
     campaign: str | None = None,
     tag: str | None = None,
+    risk_level: str | None = None,
     limit: int = 200,
 ) -> dict[str, Any]:
     """Resolve pending approvals filtered by campaign/tag."""
@@ -337,6 +339,7 @@ def process_bulk_approval_decisions(
         status="pending",
         campaign=campaign,
         tag=tag,
+        risk_level=risk_level,
         limit=limit,
     )
     results = [
@@ -358,3 +361,47 @@ def process_bulk_approval_decisions(
         "results": results,
     }
     return summary
+
+
+def build_policy_remediation_recommendations(alerts: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Build operator-safe remediation suggestions from policy alerts."""
+    recommendations: list[dict[str, str]] = []
+    for alert in alerts:
+        campaign = str(alert.get("campaign", "unassigned"))
+        metric = str(alert.get("metric", "total"))
+        severity = str(alert.get("severity", "warning"))
+        risk = "critical" if metric == "critical" else ("high" if metric == "high" else "")
+        if metric == "critical":
+            action = "Prioritize critical approvals. If malicious/noisy, bulk reject critical queue."
+        elif metric == "high":
+            action = "Drain high-risk queue by explicit approve/reject decisions."
+        else:
+            action = "Reduce total pending queue by triaging oldest requests first."
+
+        approve_cmd = (
+            f"ursa_approve_campaign(campaign='{campaign}', risk_level='{risk}')"
+            if risk
+            else f"ursa_approve_campaign(campaign='{campaign}')"
+        )
+        reject_cmd = (
+            f"ursa_reject_campaign(campaign='{campaign}', risk_level='{risk}')"
+            if risk
+            else f"ursa_reject_campaign(campaign='{campaign}')"
+        )
+        recommendations.append(
+            {
+                "campaign": campaign,
+                "metric": metric,
+                "severity": severity,
+                "action": action,
+                "approve_cmd": approve_cmd,
+                "reject_cmd": reject_cmd,
+            }
+        )
+    return recommendations
+
+
+def get_policy_remediation_plan(campaign: str | None = None) -> list[dict[str, str]]:
+    """Fetch current alerts and produce remediation guidance."""
+    alerts = evaluate_campaign_policy_alerts(campaign=campaign)
+    return build_policy_remediation_recommendations(alerts)

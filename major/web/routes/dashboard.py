@@ -2,7 +2,14 @@
 
 from fastapi import APIRouter, Request
 
-from major.db import get_events, list_approval_requests, list_sessions, list_tasks
+from major.db import (
+    evaluate_campaign_policy_alerts,
+    get_events,
+    list_approval_requests,
+    list_sessions,
+    list_tasks,
+)
+from major.governance import build_policy_remediation_recommendations
 from major.web.app import templates
 
 router = APIRouter()
@@ -15,6 +22,8 @@ async def dashboard(request: Request):
     stale = [s for s in sessions if s["status"] == "stale"]
     dead = [s for s in sessions if s["status"] == "dead"]
     pending_approvals = list_approval_requests(status="pending", limit=500)
+    policy_alerts = evaluate_campaign_policy_alerts()
+    policy_recommendations = build_policy_remediation_recommendations(policy_alerts)
     recent_tasks = list_tasks(limit=200)
     recent_events = get_events(limit=200)
 
@@ -58,6 +67,9 @@ async def dashboard(request: Request):
         "dead_count": len(dead),
         "total_sessions": len(sessions),
         "pending_approvals": len(pending_approvals),
+        "policy_alert_count": len(policy_alerts),
+        "policy_alerts": policy_alerts[:6],
+        "policy_recommendations": policy_recommendations[:6],
         "recent_events": recent_events[:15],
         "recent_tasks": recent_tasks[:10],
         "active_sessions": active[:5],

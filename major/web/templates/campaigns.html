@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Campaigns — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Campaigns</h1>
+</div>
+
+{% if campaigns %}
+<div class="card">
+    <table>
+        <thead>
+            <tr>
+                <th>Campaign</th>
+                <th>Sessions</th>
+                <th>Tasks</th>
+                <th>Events</th>
+                <th>Pending Approvals</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, counts in campaigns %}
+            <tr>
+                <td class="mono"><a href="/campaigns/{{ name }}">{{ name }}</a></td>
+                <td><a href="/sessions/?campaign={{ name }}">{{ counts.sessions }}</a></td>
+                <td><a href="/tasks/?campaign={{ name }}">{{ counts.tasks }}</a></td>
+                <td><a href="/events/?campaign={{ name }}">{{ counts.events }}</a></td>
+                <td><a href="/governance/?status=pending&campaign={{ name }}">{{ counts.approvals }}</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% else %}
+<div class="empty-state">No campaign activity found.</div>
+{% endif %}
+{% endblock %}

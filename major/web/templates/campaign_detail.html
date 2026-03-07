@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Campaign {{ campaign_name }} — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>
+        <a href="/campaigns/" style="color: var(--text-secondary)">Campaigns</a> /
+        <span class="mono">{{ campaign_name }}</span>
+    </h1>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ sessions|length }}</div>
+        <div class="stat-label">Sessions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ tasks|length }}</div>
+        <div class="stat-label">Recent Tasks</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ events|length }}</div>
+        <div class="stat-label">Recent Events</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--yellow)">{{ pending_approvals|length }}</div>
+        <div class="stat-label">Pending Approvals</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: {% if alerts %}var(--red){% else %}var(--green){% endif %}">
+            {{ alerts|length }}
+        </div>
+        <div class="stat-label">Policy Alerts</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="card">
+        <h2>Approval Risk Mix</h2>
+        <table>
+            <tbody>
+                <tr><td><span class="badge status-critical">critical</span></td><td>{{ by_risk.critical }}</td></tr>
+                <tr><td><span class="badge status-high">high</span></td><td>{{ by_risk.high }}</td></tr>
+                <tr><td><span class="badge status-medium">medium</span></td><td>{{ by_risk.medium }}</td></tr>
+                <tr><td><span class="badge status-low">low</span></td><td>{{ by_risk.low }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="card">
+        <h2>Session Status</h2>
+        {% if by_status %}
+        <table>
+            <tbody>
+                {% for name, count in by_status.items() %}
+                <tr>
+                    <td>{{ name }}</td>
+                    <td>{{ count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">No sessions.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="card">
+        <h2>Policy</h2>
+        {% if policy %}
+        <table>
+            <tbody>
+                <tr><td>max_pending_total</td><td>{{ policy.max_pending_total }}</td></tr>
+                <tr><td>max_pending_high</td><td>{{ policy.max_pending_high }}</td></tr>
+                <tr><td>max_pending_critical</td><td>{{ policy.max_pending_critical }}</td></tr>
+                <tr><td>updated_by</td><td class="mono">{{ policy.updated_by }}</td></tr>
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">No policy configured for this campaign.</div>
+        {% endif %}
+    </div>
+    <div class="card">
+        <h2>Remediation Guidance</h2>
+        {% if recommendations %}
+            {% for rec in recommendations %}
+            <div class="event-row">
+                <span class="event-level {{ 'error' if rec.severity == 'critical' else 'warning' }}">{{ rec.metric }}</span>
+                <span class="event-message">{{ rec.action }}</span>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="empty-state">No remediation needed.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card">
+    <h2>Top Task Types</h2>
+    {% if by_task_type %}
+    <table>
+        <thead>
+            <tr><th>Type</th><th>Count</th></tr>
+        </thead>
+        <tbody>
+            {% for task_type, count in by_task_type %}
+            <tr>
+                <td>{{ task_type }}</td>
+                <td>{{ count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No tasks recorded.</div>
+    {% endif %}
+</div>
+
+{% if alerts %}
+<div class="card">
+    <h2>Active Alerts</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Metric</th>
+                <th>Value</th>
+                <th>Threshold</th>
+                <th>Severity</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for alert in alerts %}
+            <tr>
+                <td>{{ alert.metric }}</td>
+                <td>{{ alert.value }}</td>
+                <td>{{ alert.threshold }}</td>
+                <td><span class="badge status-{{ 'critical' if alert.severity == 'critical' else 'high' }}">{{ alert.severity }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

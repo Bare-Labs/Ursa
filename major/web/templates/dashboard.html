@@ -28,6 +28,12 @@
         <div class="stat-value" style="color: var(--yellow)">{{ pending_approvals }}</div>
         <div class="stat-label"><a href="/governance/?status=pending">Pending Approvals</a></div>
     </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: {% if policy_alert_count > 0 %}var(--red){% else %}var(--green){% endif %}">
+            {{ policy_alert_count }}
+        </div>
+        <div class="stat-label">Policy Alerts</div>
+    </div>
 </div>
 
 {% if top_campaigns %}
@@ -53,6 +59,83 @@
             {% endfor %}
         </tbody>
     </table>
+</div>
+{% endif %}
+
+{% if policy_alert_count > 0 %}
+<div class="card">
+    <h2>Active Policy Alerts</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Campaign</th>
+                <th>Metric</th>
+                <th>Value</th>
+                <th>Threshold</th>
+                <th>Severity</th>
+                <th>Recommended</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for alert in policy_alerts %}
+            <tr>
+                <td class="mono">{{ alert.campaign }}</td>
+                <td>{{ alert.metric }}</td>
+                <td>{{ alert.value }}</td>
+                <td>{{ alert.threshold }}</td>
+                <td><span class="badge status-{{ 'critical' if alert.severity == 'critical' else 'high' }}">{{ alert.severity }}</span></td>
+                <td style="max-width: 420px;">
+                    {% set rec = policy_recommendations[loop.index0] %}
+                    <div>{{ rec.action }}</div>
+                    <div class="mono" style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">
+                        {{ rec.approve_cmd }}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if pending_approvals > 0 %}
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="card">
+        <h2>Pending Approvals By Risk</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Risk</th>
+                    <th>Count</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td><span class="badge status-critical">critical</span></td><td>{{ pending_by_risk.critical }}</td></tr>
+                <tr><td><span class="badge status-high">high</span></td><td>{{ pending_by_risk.high }}</td></tr>
+                <tr><td><span class="badge status-medium">medium</span></td><td>{{ pending_by_risk.medium }}</td></tr>
+                <tr><td><span class="badge status-low">low</span></td><td>{{ pending_by_risk.low }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="card">
+        <h2>Pending Approvals By Campaign</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Campaign</th>
+                    <th>Count</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for name, count in top_pending_campaigns %}
+                <tr>
+                    <td class="mono"><a href="/governance/?status=pending&campaign={{ name }}">{{ name }}</a></td>
+                    <td>{{ count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </div>
 {% endif %}
 

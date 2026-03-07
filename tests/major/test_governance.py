@@ -9,6 +9,8 @@ from major.db import (
     verify_immutable_audit_chain,
 )
 from major.governance import (
+    build_policy_remediation_recommendations,
+    get_policy_remediation_plan,
     process_approval_decision,
     process_bulk_approval_decisions,
     queue_task_with_policy,
@@ -210,3 +212,37 @@ def test_process_bulk_approvals_campaign_filter(tmp_db, sample_session, monkeypa
     )
     assert summary["matched"] == 1
     assert summary["rejected"] == 1
+
+
+def test_build_policy_remediation_recommendations():
+    recs = build_policy_remediation_recommendations(
+        [
+            {
+                "campaign": "ALPHA",
+                "metric": "critical",
+                "severity": "critical",
+                "value": 3,
+                "threshold": 1,
+            }
+        ]
+    )
+    assert len(recs) == 1
+    assert recs[0]["campaign"] == "ALPHA"
+    assert "critical" in recs[0]["approve_cmd"]
+
+
+def test_get_policy_remediation_plan_from_alerts(tmp_db):
+    from major import db
+
+    sid = db.create_session("10.0.0.1", campaign="ALPHA")
+    db.upsert_campaign_policy(
+        campaign="ALPHA",
+        max_pending_total=0,
+        max_pending_high=0,
+        max_pending_critical=0,
+        updated_by="test",
+    )
+    db.create_approval_request("queue_task", "critical", session_id=sid, task_type="kill")
+    plan = get_policy_remediation_plan(campaign="ALPHA")
+    assert len(plan) >= 1
+    assert plan[0]["campaign"] == "ALPHA"

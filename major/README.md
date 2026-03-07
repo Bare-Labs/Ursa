@@ -47,11 +47,19 @@ When accessed via MCP (through the root `server.py`), operators get these tools:
 - `ursa_c2_status` — Check if C2 is running, show stats
 - `ursa_events` — View the C2 event log
 - `ursa_policy_matrix` — View risk policy mapping for task types
-- `ursa_approvals` — List pending/approved/rejected step-up approvals
+- `ursa_governance_summary` — Pending approvals summary by risk/campaign (filterable)
+- `ursa_set_campaign_policy` — Configure campaign approval-alert thresholds
+- `ursa_campaign_policies` — List campaign threshold policies
+- `ursa_campaign_alerts` — Show active campaign policy threshold alerts
+- `ursa_policy_remediation_plan` — Suggested actions for active policy alerts
+- `ursa_preview_policy_remediation` — Dry-run remediation impact by strategy
+- `ursa_apply_policy_remediation` — Apply conservative campaign remediation strategy
+- `ursa_governance_report` — Export governance snapshot report (JSON/CSV)
+- `ursa_approvals` — List pending/approved/rejected step-up approvals (filterable)
 - `ursa_approve` — Approve a pending request and queue its task
 - `ursa_reject` — Reject a pending request
-- `ursa_approve_campaign` — Bulk-approve pending requests for a campaign/tag
-- `ursa_reject_campaign` — Bulk-reject pending requests for a campaign/tag
+- `ursa_approve_campaign` — Bulk-approve pending requests for campaign/tag/risk
+- `ursa_reject_campaign` — Bulk-reject pending requests for campaign/tag/risk
 - `ursa_audit_integrity` — Verify immutable audit chain integrity
 
 **Session Management:**
@@ -60,6 +68,7 @@ When accessed via MCP (through the root `server.py`), operators get these tools:
 - `ursa_set_session_context` — Set campaign and tags for session grouping
 - `ursa_campaigns` — Campaign summary (sessions/tasks/events)
 - `ursa_campaign_report` — Export campaign report as JSON/CSV
+- `ursa_campaign_info` — Detailed single-campaign operational context
 - `ursa_kill_session` — Terminate a session
 
 **Tasking:**

@@ -271,3 +271,45 @@ class TestApprovals:
         assert len(rows) == 1
         assert rows[0]["session_id"] == sid1
         assert "prod" in (rows[0]["session_tags"] or "")
+
+    def test_list_approvals_by_risk_level(self, tmp_db):
+        sid = db.create_session("10.0.0.1", campaign="ALPHA")
+        _ = db.create_approval_request("queue_task", "high", session_id=sid, task_type="download")
+        _ = db.create_approval_request("queue_task", "critical", session_id=sid, task_type="kill")
+        rows = db.list_approval_requests(status="pending", risk_level="critical", limit=20)
+        assert len(rows) == 1
+        assert rows[0]["risk_level"] == "critical"
+
+
+class TestCampaignPolicies:
+
+    def test_upsert_and_get_campaign_policy(self, tmp_db):
+        p = db.upsert_campaign_policy(
+            campaign="ALPHA",
+            max_pending_total=5,
+            max_pending_high=3,
+            max_pending_critical=1,
+            updated_by="test",
+            note="policy test",
+        )
+        assert p["campaign"] == "ALPHA"
+        assert p["max_pending_total"] == 5
+        fetched = db.get_campaign_policy("ALPHA")
+        assert fetched is not None
+        assert fetched["max_pending_high"] == 3
+
+    def test_evaluate_campaign_policy_alerts(self, tmp_db):
+        sid = db.create_session("10.0.0.1", campaign="ALPHA")
+        db.upsert_campaign_policy(
+            campaign="ALPHA",
+            max_pending_total=1,
+            max_pending_high=0,
+            max_pending_critical=0,
+            updated_by="test",
+        )
+        db.create_approval_request("queue_task", "high", session_id=sid, task_type="download")
+        db.create_approval_request("queue_task", "critical", session_id=sid, task_type="kill")
+        alerts = db.evaluate_campaign_policy_alerts(campaign="ALPHA")
+        assert len(alerts) >= 2
+        assert any(a["metric"] == "total" for a in alerts)
+        assert any(a["metric"] == "critical" for a in alerts)

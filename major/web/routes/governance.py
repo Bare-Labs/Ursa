@@ -1,11 +1,21 @@
 """Governance routes — approvals, risk matrix, and immutable audit."""
 
+import csv
+import io
+import json
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import Response
 
-from major.db import get_immutable_audit, list_approval_requests, verify_immutable_audit_chain
+from major.db import (
+    evaluate_campaign_policy_alerts,
+    get_immutable_audit,
+    list_approval_requests,
+    list_campaign_policies,
+    upsert_campaign_policy,
+    verify_immutable_audit_chain,
+)
 from major.governance import (
     format_risk_matrix,
     process_approval_decision,
@@ -22,17 +32,30 @@ async def governance_home(
     status: str = "pending",
     campaign: str | None = None,
     tag: str | None = None,
+    risk_level: str | None = None,
 ):
     approvals = list_approval_requests(
         status=status,
         campaign=campaign,
         tag=tag,
+        risk_level=risk_level,
         limit=100,
     )
     audit_check = verify_immutable_audit_chain()
     audit_events = get_immutable_audit(limit=50)
+    policies = list_campaign_policies()
+    policy_alerts = evaluate_campaign_policy_alerts(campaign=campaign)
     query = urlencode(
-        {k: v for k, v in {"status": status, "campaign": campaign, "tag": tag}.items() if v}
+        {
+            k: v
+            for k, v in {
+                "status": status,
+                "campaign": campaign,
+                "tag": tag,
+                "risk_level": risk_level,
+            }.items()
+            if v
+        }
     )
 
     return templates.TemplateResponse(
@@ -44,10 +67,13 @@ async def governance_home(
             "current_status": status,
             "current_campaign": campaign,
             "current_tag": tag,
+            "current_risk_level": risk_level,
             "query_string": query,
             "audit_check": audit_check,
             "audit_events": audit_events,
             "risk_matrix": format_risk_matrix(),
+            "policies": policies,
+            "policy_alerts": policy_alerts,
         },
     )
 
@@ -102,6 +128,7 @@ async def reject_request(
 async def bulk_approval_decisions(
     campaign: str = Form(default=""),
     tag: str = Form(default=""),
+    risk_level: str = Form(default=""),
     decision: str = Form(default="approve"),
     note: str = Form(default=""),
 ):
@@ -114,9 +141,171 @@ async def bulk_approval_decisions(
         note=note,
         campaign=campaign_value,
         tag=tag_value,
+        risk_level=risk_level.strip() or None,
         limit=500,
     )
 
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = "/governance/"
+    return response
+
+
+@router.post("/policy")
+async def upsert_policy(
+    campaign: str = Form(...),
+    max_pending_total: int = Form(default=20),
+    max_pending_high: int = Form(default=10),
+    max_pending_critical: int = Form(default=2),
+    note: str = Form(default=""),
+):
+    name = campaign.strip()
+    if not name:
+        raise HTTPException(400, "Campaign is required")
+    upsert_campaign_policy(
+        campaign=name,
+        max_pending_total=max_pending_total,
+        max_pending_high=max_pending_high,
+        max_pending_critical=max_pending_critical,
+        updated_by="web-ui:policy",
+        note=note,
+    )
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = f"/governance/?status=pending&campaign={name}"
+    return response
+
+
+@router.post("/remediation/apply")
+async def apply_remediation(
+    campaign: str = Form(...),
+    strategy: str = Form(default="reduce-critical"),
+    note: str = Form(default=""),
+):
+    name = campaign.strip()
+    if not name:
+        raise HTTPException(400, "Campaign is required")
+
+    strategy_key = strategy.strip().lower()
+    if strategy_key == "reduce-critical":
+        risk_level = "critical"
+    elif strategy_key == "reduce-high":
+        risk_level = "high"
+    elif strategy_key == "clear-backlog":
+        risk_level = None
+    else:
+        raise HTTPException(400, "Invalid strategy")
+
+    process_bulk_approval_decisions(
+        approved=False,
+        actor="web-ui:remediation",
+        note=note or f"Web remediation strategy={strategy_key}",
+        campaign=name,
+        risk_level=risk_level,
+        limit=500,
+    )
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = f"/governance/?status=pending&campaign={name}"
+    return response
+
+
+@router.post("/remediation/preview")
+async def preview_remediation(
+    request: Request,
+    campaign: str = Form(...),
+    strategy: str = Form(default="reduce-critical"),
+):
+    name = campaign.strip()
+    if not name:
+        raise HTTPException(400, "Campaign is required")
+
+    strategy_key = strategy.strip().lower()
+    if strategy_key == "reduce-critical":
+        risk_level = "critical"
+    elif strategy_key == "reduce-high":
+        risk_level = "high"
+    elif strategy_key == "clear-backlog":
+        risk_level = None
+    else:
+        raise HTTPException(400, "Invalid strategy")
+
+    rows = list_approval_requests(
+        status="pending",
+        campaign=name,
+        risk_level=risk_level,
+        limit=5000,
+    )
+    return templates.TemplateResponse(
+        "partials/remediation_preview.html",
+        {
+            "request": request,
+            "campaign": name,
+            "strategy": strategy_key,
+            "count": len(rows),
+        },
+    )
+
+
+@router.get("/report")
+async def governance_report(format: str = "json"):
+    fmt = format.strip().lower()
+    if fmt not in {"json", "csv"}:
+        raise HTTPException(400, "format must be json or csv")
+
+    policies = list_campaign_policies()
+    alerts = evaluate_campaign_policy_alerts()
+    approvals = list_approval_requests(status="pending", limit=5000)
+
+    if fmt == "json":
+        payload = {
+            "counts": {
+                "policies": len(policies),
+                "alerts": len(alerts),
+                "pending_approvals": len(approvals),
+            },
+            "policies": policies,
+            "alerts": alerts,
+            "pending_approvals": approvals,
+        }
+        body = json.dumps(payload, indent=2)
+        filename = "governance_report.json"
+        content_type = "application/json"
+    else:
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["section", "campaign", "metric", "value", "extra"])
+        for p in policies:
+            writer.writerow(
+                [
+                    "policy",
+                    p["campaign"],
+                    "thresholds",
+                    f"total={p['max_pending_total']} high={p['max_pending_high']} critical={p['max_pending_critical']}",
+                    p.get("note", ""),
+                ]
+            )
+        for a in alerts:
+            writer.writerow(
+                [
+                    "alert",
+                    a["campaign"],
+                    a["metric"],
+                    a["value"],
+                    f"threshold={a['threshold']} severity={a['severity']}",
+                ]
+            )
+        for ap in approvals:
+            writer.writerow(
+                [
+                    "pending_approval",
+                    ap.get("campaign") or "unassigned",
+                    ap.get("risk_level", ""),
+                    ap.get("id", ""),
+                    ap.get("reason", ""),
+                ]
+            )
+        body = buffer.getvalue()
+        filename = "governance_report.csv"
+        content_type = "text/csv"
+
+    response = Response(content=body, media_type=content_type)
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response

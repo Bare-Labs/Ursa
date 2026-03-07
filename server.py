@@ -62,20 +62,24 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from major.db import (  # noqa: E402
+    evaluate_campaign_policy_alerts,
     get_events,
     get_immutable_audit,
     get_session,
     get_task,
     kill_session,
     list_approval_requests,
+    list_campaign_policies,
     list_files,
     list_sessions,
     list_tasks,
     update_session_info,
+    upsert_campaign_policy,
     verify_immutable_audit_chain,
 )
 from major.governance import (  # noqa: E402
     format_risk_matrix,
+    get_policy_remediation_plan,
     normalize_args_string,
     process_approval_decision,
     process_bulk_approval_decisions,
@@ -758,6 +762,81 @@ def ursa_campaign_report(campaign: str, output_format: str = "json") -> str:
     )
 
 
+@mcp_server.tool()
+def ursa_campaign_info(campaign: str) -> str:
+    """
+    Show detailed operational context for a campaign.
+
+    Args:
+        campaign: Campaign name.
+    """
+    campaign_name = campaign.strip()
+    if not campaign_name:
+        return "Campaign is required."
+    sessions = list_sessions(campaign=campaign_name)
+    tasks = list_tasks(campaign=campaign_name, limit=200)
+    events = get_events(campaign=campaign_name, limit=200)
+    approvals = list_approval_requests(status="pending", campaign=campaign_name, limit=200)
+    if not sessions and not tasks and not events and not approvals:
+        return f"No activity found for campaign '{campaign_name}'."
+
+    by_status: dict[str, int] = {}
+    by_task_type: dict[str, int] = {}
+    by_risk: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for s in sessions:
+        status = s.get("status", "unknown")
+        by_status[status] = by_status.get(status, 0) + 1
+    for t in tasks:
+        ttype = t.get("task_type", "unknown")
+        by_task_type[ttype] = by_task_type.get(ttype, 0) + 1
+    for a in approvals:
+        risk = (a.get("risk_level") or "").lower()
+        if risk in by_risk:
+            by_risk[risk] += 1
+
+    lines = [
+        f"CAMPAIGN: {campaign_name}",
+        "=" * 50,
+        f"Sessions:          {len(sessions)}",
+        f"Tasks (recent):    {len(tasks)}",
+        f"Events (recent):   {len(events)}",
+        f"Pending approvals: {len(approvals)}",
+        "",
+        "Session Status:",
+    ]
+    for key, count in sorted(by_status.items(), key=lambda item: item[0]):
+        lines.append(f"  {key}: {count}")
+
+    lines.extend(
+        [
+            "",
+            "Task Types:",
+        ]
+    )
+    for key, count in sorted(by_task_type.items(), key=lambda item: item[1], reverse=True)[:10]:
+        lines.append(f"  {key}: {count}")
+
+    lines.extend(
+        [
+            "",
+            "Pending Approval Risk:",
+            f"  critical: {by_risk['critical']}",
+            f"  high:     {by_risk['high']}",
+            f"  medium:   {by_risk['medium']}",
+            f"  low:      {by_risk['low']}",
+        ]
+    )
+    if sessions:
+        lines.append("")
+        lines.append("Recent Sessions:")
+        for s in sessions[:10]:
+            lines.append(
+                f"  {s['id']} {s['username']}@{s['hostname']} "
+                f"({s['remote_ip']}) {s['status']}"
+            )
+    return "\n".join(lines)
+
+
 # ── Governance ──
 
 
@@ -768,10 +847,321 @@ def ursa_policy_matrix() -> str:
 
 
 @mcp_server.tool()
+def ursa_governance_summary(
+    campaign: str | None = None,
+    tag: str | None = None,
+    risk_level: str | None = None,
+) -> str:
+    """
+    Summarize pending approvals by risk and campaign.
+
+    Args:
+        campaign: Optional campaign filter.
+        tag: Optional tag filter.
+        risk_level: Optional risk filter.
+    """
+    rows = list_approval_requests(
+        status="pending",
+        campaign=(campaign or "").strip() or None,
+        tag=(tag or "").strip() or None,
+        risk_level=(risk_level or "").strip() or None,
+        limit=1000,
+    )
+    if not rows:
+        return "No pending approvals."
+
+    by_risk: dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    by_campaign: dict[str, int] = {}
+    for row in rows:
+        risk = (row.get("risk_level") or "").lower()
+        if risk in by_risk:
+            by_risk[risk] += 1
+        name = (row.get("campaign") or "unassigned").strip() or "unassigned"
+        by_campaign[name] = by_campaign.get(name, 0) + 1
+
+    lines = [
+        "PENDING APPROVAL SUMMARY",
+        "=" * 40,
+        f"Total: {len(rows)}",
+        "",
+        "By Risk:",
+        f"  critical: {by_risk['critical']}",
+        f"  high:     {by_risk['high']}",
+        f"  medium:   {by_risk['medium']}",
+        f"  low:      {by_risk['low']}",
+        "",
+        "By Campaign:",
+    ]
+    for name, count in sorted(by_campaign.items(), key=lambda item: item[1], reverse=True)[:10]:
+        lines.append(f"  {name}: {count}")
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_set_campaign_policy(
+    campaign: str,
+    max_pending_total: int = 20,
+    max_pending_high: int = 10,
+    max_pending_critical: int = 2,
+    note: str = "",
+) -> str:
+    """
+    Create/update a campaign governance threshold policy.
+
+    Args:
+        campaign: Campaign name.
+        max_pending_total: Max pending approvals before alert.
+        max_pending_high: Max pending high-risk approvals before alert.
+        max_pending_critical: Max pending critical approvals before alert.
+        note: Optional policy note.
+    """
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    policy = upsert_campaign_policy(
+        campaign=name,
+        max_pending_total=max_pending_total,
+        max_pending_high=max_pending_high,
+        max_pending_critical=max_pending_critical,
+        updated_by="mcp:ursa_set_campaign_policy",
+        note=note,
+    )
+    return (
+        f"Policy updated for {name}.\n"
+        f"max_pending_total={policy['max_pending_total']}\n"
+        f"max_pending_high={policy['max_pending_high']}\n"
+        f"max_pending_critical={policy['max_pending_critical']}"
+    )
+
+
+@mcp_server.tool()
+def ursa_campaign_policies() -> str:
+    """List configured campaign governance policies."""
+    rows = list_campaign_policies()
+    if not rows:
+        return "No campaign policies configured."
+    lines = [
+        f"{'Campaign':<20} {'Total':<8} {'High':<8} {'Critical':<8} {'Updated By'}",
+        "-" * 70,
+    ]
+    for row in rows:
+        lines.append(
+            f"{row['campaign'][:20]:<20} {row['max_pending_total']:<8} "
+            f"{row['max_pending_high']:<8} {row['max_pending_critical']:<8} {row['updated_by']}"
+        )
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_alerts(campaign: str | None = None) -> str:
+    """
+    Show active policy alerts for campaign thresholds.
+
+    Args:
+        campaign: Optional campaign filter.
+    """
+    alerts = evaluate_campaign_policy_alerts(campaign=(campaign or "").strip() or None)
+    if not alerts:
+        return "No active campaign policy alerts."
+    lines = [
+        f"{'Campaign':<20} {'Metric':<10} {'Value':<8} {'Threshold':<10} {'Severity'}",
+        "-" * 70,
+    ]
+    for alert in alerts:
+        lines.append(
+            f"{alert['campaign'][:20]:<20} {alert['metric']:<10} {alert['value']:<8} "
+            f"{alert['threshold']:<10} {alert['severity']}"
+        )
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_policy_remediation_plan(campaign: str | None = None) -> str:
+    """
+    Generate remediation recommendations for active campaign policy alerts.
+
+    Args:
+        campaign: Optional campaign filter.
+    """
+    plan = get_policy_remediation_plan(campaign=(campaign or "").strip() or None)
+    if not plan:
+        return "No active alerts to remediate."
+    lines = [
+        "POLICY REMEDIATION PLAN",
+        "=" * 40,
+    ]
+    for item in plan[:20]:
+        lines.extend(
+            [
+                f"- Campaign: {item['campaign']}  Metric: {item['metric']}  Severity: {item['severity']}",
+                f"  Action: {item['action']}",
+                f"  Approve: {item['approve_cmd']}",
+                f"  Reject:  {item['reject_cmd']}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_apply_policy_remediation(
+    campaign: str,
+    strategy: str = "reduce-critical",
+    note: str = "",
+) -> str:
+    """
+    Apply a conservative bulk remediation strategy for one campaign.
+
+    Strategies:
+      - reduce-critical: reject pending critical approvals
+      - reduce-high: reject pending high approvals
+      - clear-backlog: reject all pending approvals
+    """
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+
+    strategy_key = strategy.strip().lower()
+    if strategy_key == "reduce-critical":
+        risk_level = "critical"
+    elif strategy_key == "reduce-high":
+        risk_level = "high"
+    elif strategy_key == "clear-backlog":
+        risk_level = None
+    else:
+        return "Invalid strategy. Use: reduce-critical | reduce-high | clear-backlog"
+
+    summary = process_bulk_approval_decisions(
+        approved=False,
+        actor="mcp:ursa_apply_policy_remediation",
+        note=note or f"Auto-remediation strategy={strategy_key}",
+        campaign=name,
+        risk_level=risk_level,
+        limit=500,
+    )
+    return (
+        f"Remediation applied.\n"
+        f"Campaign: {name}\n"
+        f"Strategy: {strategy_key}\n"
+        f"Matched: {summary['matched']}\n"
+        f"Rejected: {summary['rejected']}\n"
+        f"Failed: {summary['failed']}"
+    )
+
+
+@mcp_server.tool()
+def ursa_preview_policy_remediation(campaign: str, strategy: str = "reduce-critical") -> str:
+    """
+    Preview how many approvals would be affected by a remediation strategy.
+    """
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    strategy_key = strategy.strip().lower()
+    if strategy_key == "reduce-critical":
+        risk_level = "critical"
+    elif strategy_key == "reduce-high":
+        risk_level = "high"
+    elif strategy_key == "clear-backlog":
+        risk_level = None
+    else:
+        return "Invalid strategy. Use: reduce-critical | reduce-high | clear-backlog"
+
+    rows = list_approval_requests(
+        status="pending",
+        campaign=name,
+        risk_level=risk_level,
+        limit=5000,
+    )
+    return (
+        f"Remediation preview.\n"
+        f"Campaign: {name}\n"
+        f"Strategy: {strategy_key}\n"
+        f"Would affect: {len(rows)} pending approvals"
+    )
+
+
+@mcp_server.tool()
+def ursa_governance_report(output_format: str = "json") -> str:
+    """
+    Export governance snapshot report (policies, alerts, pending approvals).
+    """
+    fmt = output_format.strip().lower()
+    if fmt not in {"json", "csv"}:
+        return "output_format must be 'json' or 'csv'."
+
+    policies = list_campaign_policies()
+    alerts = evaluate_campaign_policy_alerts()
+    approvals = list_approval_requests(status="pending", limit=5000)
+
+    reports_dir = PROJECT_ROOT / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "json":
+        payload = {
+            "generated_at": datetime.now().isoformat(),
+            "counts": {
+                "policies": len(policies),
+                "alerts": len(alerts),
+                "pending_approvals": len(approvals),
+            },
+            "policies": policies,
+            "alerts": alerts,
+            "pending_approvals": approvals,
+        }
+        out_path = reports_dir / f"governance_snapshot_{ts}.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+    else:
+        out_path = reports_dir / f"governance_snapshot_{ts}.csv"
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["section", "campaign", "metric", "value", "extra"])
+            for p in policies:
+                writer.writerow(
+                    [
+                        "policy",
+                        p["campaign"],
+                        "thresholds",
+                        f"total={p['max_pending_total']} high={p['max_pending_high']} critical={p['max_pending_critical']}",
+                        p.get("note", ""),
+                    ]
+                )
+            for a in alerts:
+                writer.writerow(
+                    [
+                        "alert",
+                        a["campaign"],
+                        a["metric"],
+                        a["value"],
+                        f"threshold={a['threshold']} severity={a['severity']}",
+                    ]
+                )
+            for p in approvals:
+                writer.writerow(
+                    [
+                        "pending_approval",
+                        p.get("campaign") or "unassigned",
+                        p.get("risk_level", ""),
+                        p.get("id", ""),
+                        p.get("reason", ""),
+                    ]
+                )
+
+    return (
+        f"Governance report exported.\n"
+        f"Format: {fmt}\n"
+        f"Path: {out_path}\n"
+        f"Policies: {len(policies)} Alerts: {len(alerts)} Pending approvals: {len(approvals)}"
+    )
+
+
+@mcp_server.tool()
 def ursa_approvals(
     status: str = "pending",
     campaign: str | None = None,
     tag: str | None = None,
+    risk_level: str | None = None,
     limit: int = 20,
 ) -> str:
     """
@@ -781,9 +1171,16 @@ def ursa_approvals(
         status: Filter by status ("pending", "approved", "rejected")
         campaign: Filter by campaign name
         tag: Filter by tag substring
+        risk_level: Filter by risk level
         limit: Max rows to return
     """
-    rows = list_approval_requests(status=status, campaign=campaign, tag=tag, limit=limit)
+    rows = list_approval_requests(
+        status=status,
+        campaign=campaign,
+        tag=tag,
+        risk_level=risk_level,
+        limit=limit,
+    )
     if not rows:
         return f"No {status} approvals."
 
@@ -851,13 +1248,19 @@ def ursa_reject(approval_id: str, note: str = "") -> str:
 
 
 @mcp_server.tool()
-def ursa_approve_campaign(campaign: str, tag: str | None = None, note: str = "") -> str:
+def ursa_approve_campaign(
+    campaign: str,
+    tag: str | None = None,
+    risk_level: str | None = None,
+    note: str = "",
+) -> str:
     """
     Approve all pending requests for a campaign/tag filter.
 
     Args:
         campaign: Campaign name to filter.
         tag: Optional tag filter.
+        risk_level: Optional risk filter.
         note: Optional audit note.
     """
     summary = process_bulk_approval_decisions(
@@ -866,6 +1269,7 @@ def ursa_approve_campaign(campaign: str, tag: str | None = None, note: str = "")
         note=note,
         campaign=campaign.strip() or None,
         tag=(tag or "").strip() or None,
+        risk_level=(risk_level or "").strip() or None,
         limit=500,
     )
     return (
@@ -878,13 +1282,19 @@ def ursa_approve_campaign(campaign: str, tag: str | None = None, note: str = "")
 
 
 @mcp_server.tool()
-def ursa_reject_campaign(campaign: str, tag: str | None = None, note: str = "") -> str:
+def ursa_reject_campaign(
+    campaign: str,
+    tag: str | None = None,
+    risk_level: str | None = None,
+    note: str = "",
+) -> str:
     """
     Reject all pending requests for a campaign/tag filter.
 
     Args:
         campaign: Campaign name to filter.
         tag: Optional tag filter.
+        risk_level: Optional risk filter.
         note: Optional audit note.
     """
     summary = process_bulk_approval_decisions(
@@ -893,6 +1303,7 @@ def ursa_reject_campaign(campaign: str, tag: str | None = None, note: str = "") 
         note=note,
         campaign=campaign.strip() or None,
         tag=(tag or "").strip() or None,
+        risk_level=(risk_level or "").strip() or None,
         limit=500,
     )
     return (
