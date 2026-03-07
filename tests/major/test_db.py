@@ -443,3 +443,61 @@ class TestCampaignChecklist:
         assert "created" in actions
         assert "status_changed" in actions
         assert "deleted" in actions
+
+    def test_checklist_history_can_filter_by_action(self, tmp_db):
+        item_id = db.add_campaign_checklist_item("ALPHA", "validate creds")
+        db.update_campaign_checklist_item(item_id, status="in_progress")
+        status_events = db.list_campaign_checklist_history("ALPHA", action="status_changed", limit=10)
+        assert any(e["action"] == "status_changed" for e in status_events)
+
+
+class TestCampaignPlaybooks:
+
+    def test_upsert_and_list_playbooks(self, tmp_db):
+        row = db.upsert_campaign_playbook(
+            "initial-access",
+            items=["recon host", {"title": "collect creds", "details": "lsass dump", "due_offset_days": 1}],
+            description="initial foothold flow",
+        )
+        assert row["name"] == "initial-access"
+        assert len(row["items"]) == 2
+        rows = db.list_campaign_playbooks(limit=10)
+        names = {r["name"] for r in rows}
+        assert "initial-access" in names
+
+    def test_apply_playbook_creates_items_and_skips_existing(self, tmp_db):
+        db.upsert_campaign_playbook(
+            "lateral",
+            items=[
+                {"title": "enumerate trusts", "owner": "alice", "due_offset_days": 0},
+                {"title": "pivot smb", "due_offset_days": 2},
+            ],
+            description="",
+        )
+        first = db.apply_campaign_playbook("ALPHA", "lateral", default_owner="team", due_base=time.time())
+        assert first["created"] == 2
+        second = db.apply_campaign_playbook("ALPHA", "lateral", default_owner="team", due_base=time.time())
+        assert second["created"] == 0
+        assert second["skipped"] == 2
+        rows = db.list_campaign_checklist(campaign="ALPHA", limit=10)
+        assert len(rows) == 2
+        assert any(r["owner"] == "alice" for r in rows)
+        assert any(r["owner"] == "team" for r in rows)
+
+    def test_delete_playbook(self, tmp_db):
+        db.upsert_campaign_playbook("cleanup", items=["remove artifacts"], description="")
+        assert db.delete_campaign_playbook("cleanup") is True
+        assert db.get_campaign_playbook("cleanup") is None
+
+    def test_snapshot_campaign_checklist_to_playbook(self, tmp_db):
+        db.add_campaign_checklist_item("ALPHA", "item one", details="a", owner="ops1")
+        item_two = db.add_campaign_checklist_item("ALPHA", "item two", details="b", owner="ops2")
+        db.update_campaign_checklist_item(item_two, status="done")
+        row = db.snapshot_campaign_checklist_to_playbook(
+            campaign="ALPHA",
+            playbook_name="alpha-open-snapshot",
+            only_open=True,
+        )
+        assert row["name"] == "alpha-open-snapshot"
+        assert len(row["items"]) == 1
+        assert row["items"][0]["title"] == "item one"

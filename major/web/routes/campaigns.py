@@ -10,18 +10,25 @@ from fastapi.responses import Response
 from major.db import (
     add_campaign_checklist_item,
     add_campaign_note,
+    apply_campaign_playbook,
     delete_campaign_checklist_item,
     delete_campaign_note,
+    delete_campaign_playbook,
     evaluate_campaign_policy_alerts,
+    get_campaign_playbook,
     get_campaign_policy,
     get_campaign_timeline,
     get_events,
     list_approval_requests,
     list_campaign_checklist,
+    list_campaign_checklist_history,
     list_campaign_notes,
+    list_campaign_playbooks,
     list_sessions,
     list_tasks,
+    snapshot_campaign_checklist_to_playbook,
     update_campaign_checklist_item,
+    upsert_campaign_playbook,
 )
 from major.governance import get_policy_remediation_plan
 from major.web.app import templates
@@ -54,6 +61,35 @@ def _campaign_redirect(campaign_name: str, status: str = "", owner: str = "", q:
     if params:
         return f"/campaigns/{campaign_name}?" + urlencode(params)
     return f"/campaigns/{campaign_name}"
+
+
+def _parse_playbook_items(raw: str) -> list[dict]:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback mini-format: `title | details | owner | due_offset_days`
+    items = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        items.append(
+            {
+                "title": parts[0] if len(parts) >= 1 else "",
+                "details": parts[1] if len(parts) >= 2 else "",
+                "owner": parts[2] if len(parts) >= 3 else "",
+                "due_offset_days": parts[3] if len(parts) >= 4 and parts[3] else None,
+            }
+        )
+    return items
 
 
 @router.get("/")
@@ -98,6 +134,52 @@ async def campaign_list(request: Request):
     )
 
 
+@router.get("/playbooks")
+async def campaign_playbooks_page(request: Request):
+    playbooks = list_campaign_playbooks(limit=300)
+    return templates.TemplateResponse(
+        "campaign_playbooks.html",
+        {
+            "request": request,
+            "active_page": "campaigns",
+            "playbooks": playbooks,
+        },
+    )
+
+
+@router.post("/playbooks/save")
+async def campaign_playbooks_save(request: Request):
+    form = await request.form()
+    name = str(form.get("name", "")).strip()
+    description = str(form.get("description", "")).strip()
+    items_raw = str(form.get("items", "")).strip()
+    items = _parse_playbook_items(items_raw)
+    if name and items:
+        upsert_campaign_playbook(name, items=items, description=description)
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = "/campaigns/playbooks"
+    return response
+
+
+@router.post("/playbooks/{name}/delete")
+async def campaign_playbooks_delete(name: str):
+    _ = delete_campaign_playbook(name.strip())
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = "/campaigns/playbooks"
+    return response
+
+
+@router.get("/playbooks/{name}/export")
+async def campaign_playbook_export(name: str):
+    playbook = get_campaign_playbook(name.strip())
+    if not playbook:
+        return Response(content="playbook not found", status_code=404)
+    body = json.dumps(playbook, indent=2)
+    response = Response(content=body, media_type="application/json")
+    response.headers["Content-Disposition"] = f'attachment; filename="campaign_playbook_{name}.json"'
+    return response
+
+
 @router.get("/{campaign_name}")
 async def campaign_detail(request: Request, campaign_name: str):
     status_filter = str(request.query_params.get("status", "")).strip().lower()
@@ -127,6 +209,8 @@ async def campaign_detail(request: Request, campaign_name: str):
         limit=300,
     )
     checklist_all = list_campaign_checklist(campaign=campaign_name, limit=1000)
+    checklist_history = list_campaign_checklist_history(campaign=campaign_name, limit=120)
+    playbooks = list_campaign_playbooks(limit=100)
     checklist_counts = {"pending": 0, "in_progress": 0, "blocked": 0, "done": 0}
     for item in checklist_all:
         st = (item.get("status") or "pending").strip().lower()
@@ -165,6 +249,8 @@ async def campaign_detail(request: Request, campaign_name: str):
             "notes": notes,
             "checklist_items": checklist_items,
             "checklist_counts": checklist_counts,
+            "checklist_history": checklist_history,
+            "playbooks": playbooks,
             "checklist_filters": {
                 "status": status_filter,
                 "owner": owner_filter,
@@ -312,6 +398,64 @@ async def campaign_bulk_update_checklist(request: Request, campaign_name: str):
     return response
 
 
+@router.post("/{campaign_name}/playbook/apply")
+async def campaign_apply_playbook(request: Request, campaign_name: str):
+    form = await request.form()
+    playbook_name = str(form.get("playbook", "")).strip()
+    owner = str(form.get("owner", "")).strip()
+    status_filter = str(form.get("status_filter", "")).strip().lower()
+    owner_filter = str(form.get("owner_filter", "")).strip()
+    text_filter = str(form.get("q_filter", "")).strip()
+    sort_filter = str(form.get("sort_filter", "created_desc")).strip().lower()
+    if playbook_name:
+        apply_campaign_playbook(
+            campaign=campaign_name,
+            playbook_name=playbook_name,
+            default_owner=owner,
+            skip_existing=True,
+        )
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = _campaign_redirect(
+        campaign_name,
+        status=status_filter,
+        owner=owner_filter,
+        q=text_filter,
+        sort=sort_filter,
+    )
+    return response
+
+
+@router.post("/{campaign_name}/playbook/snapshot")
+async def campaign_snapshot_playbook(request: Request, campaign_name: str):
+    form = await request.form()
+    playbook_name = str(form.get("playbook_name", "")).strip()
+    description = str(form.get("description", "")).strip()
+    only_open = str(form.get("only_open", "1")).strip() in {"1", "true", "on", "yes"}
+    status_filter = str(form.get("status_filter", "")).strip().lower()
+    owner_filter = str(form.get("owner_filter", "")).strip()
+    text_filter = str(form.get("q_filter", "")).strip()
+    sort_filter = str(form.get("sort_filter", "created_desc")).strip().lower()
+    if playbook_name:
+        try:
+            snapshot_campaign_checklist_to_playbook(
+                campaign=campaign_name,
+                playbook_name=playbook_name,
+                description=description,
+                only_open=only_open,
+            )
+        except ValueError:
+            pass
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = _campaign_redirect(
+        campaign_name,
+        status=status_filter,
+        owner=owner_filter,
+        q=text_filter,
+        sort=sort_filter,
+    )
+    return response
+
+
 @router.get("/{campaign_name}/handoff")
 async def campaign_handoff_report(campaign_name: str, format: str = "md"):
     sessions = list_sessions(campaign=campaign_name)
@@ -320,6 +464,7 @@ async def campaign_handoff_report(campaign_name: str, format: str = "md"):
     approvals = list_approval_requests(status="pending", campaign=campaign_name, limit=300)
     notes = list_campaign_notes(campaign=campaign_name, limit=100)
     checklist = list_campaign_checklist(campaign=campaign_name, limit=400)
+    checklist_history = list_campaign_checklist_history(campaign=campaign_name, limit=100)
     alerts = evaluate_campaign_policy_alerts(campaign=campaign_name)
     checklist_open = [c for c in checklist if c.get("status") != "done"]
 
@@ -339,12 +484,14 @@ async def campaign_handoff_report(campaign_name: str, format: str = "md"):
             "notes": len(notes),
             "checklist_items": len(checklist),
             "checklist_open": len(checklist_open),
+            "checklist_changes": len(checklist_history),
         },
         "session_status": by_status,
         "pending_approvals": approvals[:10],
         "alerts": alerts[:10],
         "notes": notes[:20],
         "checklist": checklist[:30],
+        "checklist_history": checklist_history[:20],
     }
 
     fmt = format.strip().lower()
@@ -365,6 +512,7 @@ async def campaign_handoff_report(campaign_name: str, format: str = "md"):
             f"- Notes: {payload['counts']['notes']}",
             f"- Checklist items: {payload['counts']['checklist_items']}",
             f"- Open checklist: {payload['counts']['checklist_open']}",
+            f"- Checklist changes: {payload['counts']['checklist_changes']}",
             "",
             "## Session Status",
         ]
@@ -393,6 +541,16 @@ async def campaign_handoff_report(campaign_name: str, format: str = "md"):
                 lines.append(
                     f"- `{item['id']}` [{item['status']}] {item['title']} "
                     f"(owner={item.get('owner') or '-'}, due={due})"
+                )
+        else:
+            lines.append("- None")
+        lines.extend(["", "## Checklist History"])
+        if checklist_history:
+            for item in checklist_history[:20]:
+                lines.append(
+                    f"- [{datetime.fromtimestamp(item['created_at']).strftime('%Y-%m-%d %H:%M:%S')}] "
+                    f"item={item['item_id']} action={item['action']} status={item.get('new_status') or '-'} "
+                    f"title={item.get('title') or '-'}"
                 )
         else:
             lines.append("- None")

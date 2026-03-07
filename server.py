@@ -18,11 +18,18 @@ Tools:
         - ursa_campaign_notes — List campaign notes
         - ursa_campaign_delete_note — Delete campaign note
         - ursa_campaign_checklist — List campaign checklist items
+        - ursa_campaign_playbooks — List checklist playbooks
+        - ursa_campaign_save_playbook — Create/update checklist playbook
+        - ursa_campaign_delete_playbook — Delete checklist playbook
+        - ursa_campaign_apply_playbook — Apply playbook to campaign checklist
+        - ursa_campaign_snapshot_playbook — Snapshot campaign checklist into a playbook
         - ursa_campaign_add_checklist_item — Add campaign checklist item
         - ursa_campaign_update_checklist_item — Update checklist item
         - ursa_campaign_delete_checklist_item — Delete checklist item
         - ursa_campaign_bulk_update_checklist — Bulk status update by checklist filter
+        - ursa_campaign_checklist_history — Checklist history timeline
         - ursa_campaign_checklist_alerts — Checklist due/overdue alert view
+        - ursa_campaign_checklist_from_alerts — Generate checklist items from policy alerts
         - ursa_campaign_handoff — Generate handoff brief
         - ursa_campaign_handoff_report — Export handoff report
         - ursa_kill_session  — Kill a session
@@ -77,8 +84,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from major.db import (  # noqa: E402
     add_campaign_checklist_item,
     add_campaign_note,
+    apply_campaign_playbook,
     delete_campaign_checklist_item,
     delete_campaign_note,
+    delete_campaign_playbook,
     delete_campaign_policy,
     evaluate_campaign_policy_alerts,
     get_campaign_timeline,
@@ -89,13 +98,17 @@ from major.db import (  # noqa: E402
     kill_session,
     list_approval_requests,
     list_campaign_checklist,
+    list_campaign_checklist_history,
     list_campaign_notes,
+    list_campaign_playbooks,
     list_campaign_policies,
     list_files,
     list_sessions,
     list_tasks,
+    snapshot_campaign_checklist_to_playbook,
     update_campaign_checklist_item,
     update_session_info,
+    upsert_campaign_playbook,
     upsert_campaign_policy,
     verify_immutable_audit_chain,
 )
@@ -945,6 +958,125 @@ def ursa_campaign_notes(campaign: str, limit: int = 30) -> str:
 
 
 @mcp_server.tool()
+def ursa_campaign_playbooks(limit: int = 50) -> str:
+    """List available checklist playbooks."""
+    rows = list_campaign_playbooks(limit=max(1, min(limit, 200)))
+    if not rows:
+        return "No campaign playbooks configured."
+    lines = [f"{'Playbook':<24} {'Items':<8} {'Updated':<20} Description", "-" * 90]
+    for row in rows:
+        lines.append(
+            f"{row['name'][:24]:<24} {len(row.get('items') or []):<8} "
+            f"{_format_time(row.get('updated_at')):<20} {row.get('description') or ''}"
+        )
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_save_playbook(name: str, items_json: str, description: str = "") -> str:
+    """Create or update a checklist playbook from JSON list of items."""
+    playbook = name.strip()
+    if not playbook:
+        return "name is required."
+    try:
+        items = json.loads(items_json)
+    except json.JSONDecodeError:
+        return "items_json must be valid JSON (array of strings or item objects)."
+    try:
+        row = upsert_campaign_playbook(playbook, items=items, description=description.strip())
+    except ValueError as exc:
+        return f"Invalid playbook: {exc}"
+    return (
+        f"Playbook saved.\n"
+        f"Name: {row['name']}\n"
+        f"Items: {len(row.get('items') or [])}\n"
+        f"Updated: {_format_time(row.get('updated_at'))}"
+    )
+
+
+@mcp_server.tool()
+def ursa_campaign_delete_playbook(name: str) -> str:
+    """Delete a checklist playbook by name."""
+    playbook = name.strip()
+    if not playbook:
+        return "name is required."
+    deleted = delete_campaign_playbook(playbook)
+    return f"Deleted playbook {playbook}." if deleted else f"Playbook {playbook} not found."
+
+
+@mcp_server.tool()
+def ursa_campaign_apply_playbook(
+    campaign: str,
+    playbook: str,
+    owner: str = "",
+    due_base_iso: str = "",
+    skip_existing: bool = True,
+) -> str:
+    """Apply a checklist playbook to a campaign."""
+    campaign_name = campaign.strip()
+    playbook_name = playbook.strip()
+    if not campaign_name:
+        return "campaign is required."
+    if not playbook_name:
+        return "playbook is required."
+    due_base = None
+    if due_base_iso.strip():
+        try:
+            due_base = datetime.fromisoformat(due_base_iso.strip()).timestamp()
+        except ValueError:
+            return "due_base_iso must be ISO date/datetime (example: 2026-03-09T09:00)."
+    result = apply_campaign_playbook(
+        campaign=campaign_name,
+        playbook_name=playbook_name,
+        default_owner=owner.strip(),
+        due_base=due_base,
+        skip_existing=skip_existing,
+    )
+    if result.get("missing"):
+        return f"Playbook '{playbook_name}' not found."
+    return (
+        f"Applied playbook to campaign.\n"
+        f"Campaign: {campaign_name}\n"
+        f"Playbook: {playbook_name}\n"
+        f"Created: {result['created']}\n"
+        f"Skipped existing: {result['skipped']}\n"
+        f"Total in playbook: {result['total']}"
+    )
+
+
+@mcp_server.tool()
+def ursa_campaign_snapshot_playbook(
+    campaign: str,
+    name: str,
+    description: str = "",
+    only_open: bool = True,
+) -> str:
+    """Snapshot current campaign checklist into a reusable playbook."""
+    campaign_name = campaign.strip()
+    playbook_name = name.strip()
+    if not campaign_name:
+        return "campaign is required."
+    if not playbook_name:
+        return "name is required."
+    try:
+        row = snapshot_campaign_checklist_to_playbook(
+            campaign=campaign_name,
+            playbook_name=playbook_name,
+            description=description.strip(),
+            only_open=only_open,
+        )
+    except ValueError as exc:
+        return str(exc)
+    return (
+        f"Playbook snapshot saved.\n"
+        f"Campaign: {campaign_name}\n"
+        f"Playbook: {row['name']}\n"
+        f"Items: {len(row.get('items') or [])}\n"
+        f"Updated: {_format_time(row.get('updated_at'))}"
+    )
+
+
+@mcp_server.tool()
 def ursa_campaign_checklist(
     campaign: str,
     status: str | None = None,
@@ -982,6 +1114,35 @@ def ursa_campaign_checklist(
         )
         if row.get("details"):
             lines.append(f"       details: {row['details']}")
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_checklist_history(
+    campaign: str,
+    action: str = "",
+    item_id: int = 0,
+    limit: int = 50,
+) -> str:
+    """List checklist history entries for a campaign."""
+    name = campaign.strip()
+    if not name:
+        return "campaign is required."
+    action_filter = action.strip().lower() or None
+    rows = list_campaign_checklist_history(
+        campaign=name,
+        action=action_filter,
+        item_id=item_id if item_id > 0 else None,
+        limit=max(1, min(limit, 500)),
+    )
+    if not rows:
+        return f"No checklist history for campaign '{name}'."
+    lines = [f"CHECKLIST HISTORY: {name}", "=" * 100]
+    for row in rows:
+        lines.append(
+            f"{_format_time(row['created_at'])} item={row['item_id']:<5} "
+            f"action={row['action']:<14} status={row.get('new_status') or '-':<12} title={row.get('title') or '-'}"
+        )
     return "\n".join(lines)
 
 
@@ -1149,6 +1310,57 @@ def ursa_campaign_checklist_alerts(
     if not overdue_sorted and not due_soon_sorted:
         lines.extend(["", "No checklist due alerts in scope."])
     return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_checklist_from_alerts(
+    campaign: str,
+    owner: str = "",
+    due_in_hours: int = 24,
+) -> str:
+    """Generate campaign checklist remediation items from active policy alerts."""
+    name = campaign.strip()
+    if not name:
+        return "campaign is required."
+    plan = get_policy_remediation_plan(campaign=name)
+    if not plan:
+        return f"No active policy alerts for campaign '{name}'."
+
+    due_at = None
+    if due_in_hours > 0:
+        due_at = time.time() + min(max(due_in_hours, 1), 24 * 14) * 3600
+    existing_titles = {
+        (row.get("title") or "").strip().lower()
+        for row in list_campaign_checklist(campaign=name, limit=5000)
+    }
+    created = 0
+    skipped = 0
+    for item in plan:
+        title = f"Policy remediation: {item['metric']} ({item['severity']})"
+        if title.lower() in existing_titles:
+            skipped += 1
+            continue
+        details = (
+            f"{item['action']}\n"
+            f"Approve path: {item['approve_cmd']}\n"
+            f"Reject path: {item['reject_cmd']}"
+        )
+        add_campaign_checklist_item(
+            campaign=name,
+            title=title,
+            details=details,
+            owner=owner.strip(),
+            due_at=due_at,
+        )
+        created += 1
+        existing_titles.add(title.lower())
+    return (
+        f"Checklist items generated from alerts.\n"
+        f"Campaign: {name}\n"
+        f"Recommendations: {len(plan)}\n"
+        f"Created: {created}\n"
+        f"Skipped existing: {skipped}"
+    )
 
 
 @mcp_server.tool()

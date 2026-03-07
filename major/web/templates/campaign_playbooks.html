@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Campaign Playbooks — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>
+        <a href="/campaigns/" style="color: var(--text-secondary)">Campaigns</a> /
+        Playbooks
+    </h1>
+</div>
+
+<div class="card">
+    <h2>Save Playbook</h2>
+    <form class="shell-form" method="post" action="/campaigns/playbooks/save">
+        <input type="text" name="name" placeholder="Playbook name (e.g. initial-access)" required>
+        <input type="text" name="description" placeholder="Description">
+        <textarea name="items" rows="8" style="width:100%; background:#111; color:#ddd; border:1px solid #333; padding:8px;"
+                  placeholder='JSON list or newline list.&#10;JSON example: [{"title":"Validate beacon","details":"checkin cadence","owner":"ops","due_offset_days":0}]&#10;Line example: Title | Details | Owner | 1'></textarea>
+        <button type="submit">Save Playbook</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Playbooks</h2>
+    {% if playbooks %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Items</th>
+                <th>Updated</th>
+                <th></th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in playbooks %}
+            <tr>
+                <td class="mono">{{ p.name }}</td>
+                <td>{{ p.description or "-" }}</td>
+                <td>{{ p.items|length }}</td>
+                <td>{{ p.updated_at | format_ts }}</td>
+                <td><a class="filter-btn" href="/campaigns/playbooks/{{ p.name }}/export">Export JSON</a></td>
+                <td>
+                    <form method="post" action="/campaigns/playbooks/{{ p.name }}/delete"
+                          onsubmit="return confirm('Delete playbook {{ p.name }}?')">
+                        <button type="submit" class="btn btn-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No playbooks configured.</div>
+    {% endif %}
+</div>
+{% endblock %}

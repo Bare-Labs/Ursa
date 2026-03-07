@@ -10,6 +10,7 @@
     <div class="filter-group">
         <a class="filter-btn" href="/campaigns/{{ campaign_name }}/handoff?format=md">Handoff MD</a>
         <a class="filter-btn" href="/campaigns/{{ campaign_name }}/handoff?format=json">Handoff JSON</a>
+        <a class="filter-btn" href="/campaigns/playbooks">Playbooks</a>
     </div>
 </div>
 
@@ -116,6 +117,39 @@
         <button type="submit">Bulk Update</button>
     </form>
 
+    {% if playbooks %}
+    <form class="shell-form" method="post" action="/campaigns/{{ campaign_name }}/playbook/apply">
+        <input type="hidden" name="status_filter" value="{{ checklist_filters.status }}">
+        <input type="hidden" name="owner_filter" value="{{ checklist_filters.owner }}">
+        <input type="hidden" name="q_filter" value="{{ checklist_filters.q }}">
+        <input type="hidden" name="sort_filter" value="{{ checklist_filters.sort }}">
+        <select name="playbook" required>
+            <option value="">select playbook</option>
+            {% for pb in playbooks %}
+            <option value="{{ pb.name }}">{{ pb.name }} ({{ pb.items|length }} items)</option>
+            {% endfor %}
+        </select>
+        <input type="text" name="owner" placeholder="Default owner override">
+        <button type="submit">Apply Playbook</button>
+    </form>
+    {% else %}
+    <div class="empty-state">No playbooks configured.</div>
+    {% endif %}
+
+    <form class="shell-form" method="post" action="/campaigns/{{ campaign_name }}/playbook/snapshot">
+        <input type="hidden" name="status_filter" value="{{ checklist_filters.status }}">
+        <input type="hidden" name="owner_filter" value="{{ checklist_filters.owner }}">
+        <input type="hidden" name="q_filter" value="{{ checklist_filters.q }}">
+        <input type="hidden" name="sort_filter" value="{{ checklist_filters.sort }}">
+        <input type="text" name="playbook_name" placeholder="Snapshot playbook name" required>
+        <input type="text" name="description" placeholder="Snapshot description (optional)">
+        <label style="display:flex; align-items:center; gap:6px; color: var(--text-secondary);">
+            <input type="checkbox" name="only_open" value="1" checked>
+            only open checklist items
+        </label>
+        <button type="submit">Snapshot To Playbook</button>
+    </form>
+
     <form class="shell-form" method="post" action="/campaigns/{{ campaign_name }}/checklist">
         <input type="hidden" name="status_filter" value="{{ checklist_filters.status }}">
         <input type="hidden" name="owner_filter" value="{{ checklist_filters.owner }}">
@@ -184,6 +218,36 @@
 {% else %}
     <div class="empty-state">No checklist items yet.</div>
 {% endif %}
+</div>
+
+<div class="card">
+    <h2>Checklist History</h2>
+    {% if checklist_history %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Item</th>
+                <th>Action</th>
+                <th>Status</th>
+                <th>Title</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for h in checklist_history[:80] %}
+            <tr>
+                <td>{{ h.created_at | format_ts }}</td>
+                <td class="mono">{{ h.item_id }}</td>
+                <td>{{ h.action }}</td>
+                <td>{{ h.new_status or "-" }}</td>
+                <td>{{ h.title or "-" }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No checklist history yet.</div>
+    {% endif %}
 </div>
 
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">

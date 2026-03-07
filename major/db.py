@@ -171,6 +171,14 @@ def init_db():
             details TEXT DEFAULT '{}'
         );
 
+        CREATE TABLE IF NOT EXISTS campaign_playbooks (
+            name TEXT PRIMARY KEY,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            description TEXT DEFAULT '',
+            items_json TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -188,9 +196,12 @@ def init_db():
             ON campaign_checklist_history(campaign);
         CREATE INDEX IF NOT EXISTS idx_campaign_checklist_history_created_at
             ON campaign_checklist_history(created_at);
+        CREATE INDEX IF NOT EXISTS idx_campaign_playbooks_updated_at
+            ON campaign_playbooks(updated_at);
     """)
     _ensure_sessions_columns(db)
     _ensure_campaign_policy_columns(db)
+    _ensure_default_campaign_playbooks(db)
     db.commit()
     db.close()
 
@@ -626,6 +637,51 @@ def _ensure_campaign_policy_columns(db):
     if "max_oldest_pending_minutes" not in columns:
         db.execute(
             "ALTER TABLE campaign_policies ADD COLUMN max_oldest_pending_minutes INTEGER DEFAULT 60"
+        )
+
+
+def _ensure_default_campaign_playbooks(db):
+    """Seed baseline playbooks when none are configured."""
+    existing = db.execute("SELECT COUNT(*) AS n FROM campaign_playbooks").fetchone()
+    if existing and int(existing["n"]) > 0:
+        return
+    now = time.time()
+    defaults = [
+        (
+            "initial-access",
+            "Baseline foothold and validation sequence.",
+            [
+                {"title": "Validate beacon stability", "details": "Confirm consistent check-ins", "due_offset_days": 0},
+                {"title": "Collect host baseline", "details": "Hostname, user, domain, AV posture", "due_offset_days": 0},
+                {"title": "Establish operator notes", "details": "Capture mission context and goals", "due_offset_days": 0},
+            ],
+        ),
+        (
+            "lateral-movement",
+            "Prepare for lateral movement execution.",
+            [
+                {"title": "Enumerate reachable hosts", "details": "SMB/RDP/WinRM pathways", "due_offset_days": 1},
+                {"title": "Map credential options", "details": "Token, hash, and delegated auth paths", "due_offset_days": 1},
+                {"title": "Define rollback trigger", "details": "Conditions to halt movement safely", "due_offset_days": 2},
+            ],
+        ),
+        (
+            "cleanup-handoff",
+            "End-of-operation cleanup and handoff.",
+            [
+                {"title": "Purge temporary artifacts", "details": "Remove dropped binaries/scripts", "due_offset_days": 0},
+                {"title": "Archive campaign evidence", "details": "Export handoff + governance reports", "due_offset_days": 0},
+                {"title": "Write final handoff note", "details": "Known risks, gaps, and next actions", "due_offset_days": 0},
+            ],
+        ),
+    ]
+    for name, description, items in defaults:
+        db.execute(
+            """
+            INSERT OR IGNORE INTO campaign_playbooks (name, created_at, updated_at, description, items_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, now, now, description, json.dumps(items)),
         )
 
 
@@ -1113,20 +1169,203 @@ def delete_campaign_checklist_item(item_id):
     return changed > 0
 
 
-def list_campaign_checklist_history(campaign, limit=200):
+def list_campaign_checklist_history(campaign, action=None, item_id=None, limit=200):
     """List checklist history events for a campaign."""
     db = get_db()
-    rows = db.execute(
-        """
+    query = """
         SELECT * FROM campaign_checklist_history
         WHERE campaign=?
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (campaign, limit),
+    """
+    params = [campaign]
+    if action:
+        query += " AND action=?"
+        params.append(action)
+    if item_id is not None:
+        query += " AND item_id=?"
+        params.append(item_id)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = db.execute(
+        query,
+        params,
     ).fetchall()
     db.close()
     return [dict(r) for r in rows]
+
+
+def upsert_campaign_playbook(name, items, description=""):
+    """Create or update a reusable checklist playbook."""
+    playbook = name.strip()
+    if not playbook:
+        raise ValueError("Playbook name is required")
+    if not isinstance(items, list) or not items:
+        raise ValueError("Playbook items must be a non-empty list")
+
+    normalized = []
+    for item in items:
+        if isinstance(item, str):
+            title = item.strip()
+            if not title:
+                continue
+            normalized.append({"title": title, "details": "", "owner": "", "due_offset_days": None})
+            continue
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        if not title:
+            continue
+        due_offset = item.get("due_offset_days")
+        try:
+            due_offset = int(due_offset) if due_offset is not None else None
+        except (TypeError, ValueError):
+            due_offset = None
+        normalized.append(
+            {
+                "title": title,
+                "details": str(item.get("details", "")).strip(),
+                "owner": str(item.get("owner", "")).strip(),
+                "due_offset_days": due_offset,
+            }
+        )
+    if not normalized:
+        raise ValueError("Playbook items must include at least one valid title")
+
+    now = time.time()
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO campaign_playbooks (name, created_at, updated_at, description, items_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            updated_at=excluded.updated_at,
+            description=excluded.description,
+            items_json=excluded.items_json
+        """,
+        (playbook, now, now, description.strip(), json.dumps(normalized)),
+    )
+    db.commit()
+    db.close()
+    return get_campaign_playbook(playbook)
+
+
+def get_campaign_playbook(name):
+    """Fetch one playbook by name."""
+    db = get_db()
+    row = db.execute("SELECT * FROM campaign_playbooks WHERE name=?", (name,)).fetchone()
+    db.close()
+    if not row:
+        return None
+    payload = dict(row)
+    try:
+        payload["items"] = json.loads(payload.pop("items_json") or "[]")
+    except json.JSONDecodeError:
+        payload["items"] = []
+    return payload
+
+
+def list_campaign_playbooks(limit=100):
+    """List all campaign playbooks."""
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT * FROM campaign_playbooks
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    db.close()
+    items = []
+    for row in rows:
+        payload = dict(row)
+        try:
+            parsed = json.loads(payload.pop("items_json") or "[]")
+        except json.JSONDecodeError:
+            parsed = []
+        payload["items"] = parsed
+        items.append(payload)
+    return items
+
+
+def delete_campaign_playbook(name):
+    """Delete a campaign playbook by name."""
+    db = get_db()
+    db.execute("DELETE FROM campaign_playbooks WHERE name=?", (name,))
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
+
+
+def apply_campaign_playbook(campaign, playbook_name, default_owner="", due_base=None, skip_existing=True):
+    """Apply a playbook to a campaign by creating checklist items."""
+    book = get_campaign_playbook(playbook_name)
+    if not book:
+        return {"created": 0, "skipped": 0, "total": 0, "missing": True}
+
+    due_anchor = float(due_base) if due_base is not None else time.time()
+    existing = set()
+    if skip_existing:
+        for row in list_campaign_checklist(campaign=campaign, limit=5000):
+            existing.add((row.get("title") or "").strip().lower())
+
+    created = 0
+    skipped = 0
+    for item in book["items"]:
+        title = str(item.get("title", "")).strip()
+        if not title:
+            continue
+        key = title.lower()
+        if skip_existing and key in existing:
+            skipped += 1
+            continue
+        owner = str(item.get("owner", "")).strip() or default_owner.strip()
+        due_at = None
+        offset = item.get("due_offset_days")
+        if offset is not None:
+            try:
+                due_at = due_anchor + int(offset) * 86400
+            except (TypeError, ValueError):
+                due_at = None
+        add_campaign_checklist_item(
+            campaign=campaign,
+            title=title,
+            details=str(item.get("details", "")).strip(),
+            owner=owner,
+            due_at=due_at,
+        )
+        created += 1
+        existing.add(key)
+    return {"created": created, "skipped": skipped, "total": len(book["items"]), "missing": False}
+
+
+def snapshot_campaign_checklist_to_playbook(
+    campaign,
+    playbook_name,
+    description="",
+    only_open=True,
+):
+    """Create/update a playbook from the campaign's current checklist."""
+    rows = list_campaign_checklist(campaign=campaign, limit=5000)
+    if only_open:
+        rows = [row for row in rows if row.get("status") != "done"]
+    items = []
+    for row in rows:
+        items.append(
+            {
+                "title": str(row.get("title") or "").strip(),
+                "details": str(row.get("details") or "").strip(),
+                "owner": str(row.get("owner") or "").strip(),
+                "due_offset_days": None,
+            }
+        )
+    if not items:
+        raise ValueError("No checklist items available to snapshot")
+    return upsert_campaign_playbook(
+        playbook_name,
+        items=items,
+        description=description.strip() or f"Snapshot from campaign {campaign}",
+    )
 
 
 def _record_campaign_checklist_history(

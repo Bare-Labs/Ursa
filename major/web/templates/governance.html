@@ -107,6 +107,12 @@
             <input type="hidden" name="strategy" id="remediation-preview-strategy" value="reduce-critical">
             <button type="submit">Preview Impact</button>
         </form>
+        <form class="shell-form" method="post" action="/governance/remediation/checklist" style="margin-bottom: 8px;">
+            <input type="text" name="campaign" placeholder="Campaign" value="{{ current_campaign or '' }}" required>
+            <input type="text" name="owner" placeholder="Checklist owner (optional)">
+            <input type="text" name="due_in_hours" placeholder="Due in hours" value="24">
+            <button type="submit">Create Checklist From Alerts</button>
+        </form>
         <script>
             (function () {
                 const source = document.getElementById("remediation-strategy");

@@ -3,22 +3,26 @@
 import csv
 import io
 import json
+import time
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import Response
 
 from major.db import (
+    add_campaign_checklist_item,
     delete_campaign_policy,
     evaluate_campaign_policy_alerts,
     get_immutable_audit,
     list_approval_requests,
+    list_campaign_checklist,
     list_campaign_policies,
     upsert_campaign_policy,
     verify_immutable_audit_chain,
 )
 from major.governance import (
     format_risk_matrix,
+    get_policy_remediation_plan,
     process_approval_decision,
     process_bulk_approval_decisions,
 )
@@ -216,6 +220,49 @@ async def apply_remediation(
         risk_level=risk_level,
         limit=500,
     )
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = f"/governance/?status=pending&campaign={name}"
+    return response
+
+
+@router.post("/remediation/checklist")
+async def create_remediation_checklist(
+    campaign: str = Form(...),
+    owner: str = Form(default=""),
+    due_in_hours: int = Form(default=24),
+):
+    name = campaign.strip()
+    if not name:
+        raise HTTPException(400, "Campaign is required")
+    plan = get_policy_remediation_plan(campaign=name)
+    if not plan:
+        response = Response(status_code=200)
+        response.headers["HX-Redirect"] = f"/governance/?status=pending&campaign={name}"
+        return response
+
+    existing_titles = {
+        (row.get("title") or "").strip().lower() for row in list_campaign_checklist(campaign=name, limit=5000)
+    }
+    due_at = None
+    if due_in_hours > 0:
+        due_at = time.time() + min(due_in_hours, 24 * 14) * 3600
+    for item in plan:
+        title = f"Policy remediation: {item['metric']} ({item['severity']})"
+        if title.lower() in existing_titles:
+            continue
+        details = (
+            f"{item['action']}\n"
+            f"Approve path: {item['approve_cmd']}\n"
+            f"Reject path: {item['reject_cmd']}"
+        )
+        add_campaign_checklist_item(
+            campaign=name,
+            title=title,
+            details=details,
+            owner=owner.strip(),
+            due_at=due_at,
+        )
+        existing_titles.add(title.lower())
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = f"/governance/?status=pending&campaign={name}"
     return response
