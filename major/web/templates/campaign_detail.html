@@ -34,6 +34,43 @@
     </div>
 </div>
 
+<div class="card">
+    <h2>Campaign Notes</h2>
+    <form class="shell-form" method="post" action="/campaigns/{{ campaign_name }}/notes">
+        <input type="text" name="author" placeholder="Author" value="web-ui:operator">
+        <input type="text" name="note" placeholder="Add campaign note..." required>
+        <button type="submit">Add Note</button>
+    </form>
+{% if notes %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Author</th>
+                <th>Note</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for n in notes[:60] %}
+            <tr>
+                <td>{{ n.created_at | format_ts }}</td>
+                <td class="mono">{{ n.author }}</td>
+                <td>{{ n.note }}</td>
+                <td>
+                    <form method="post" action="/campaigns/{{ campaign_name }}/notes/{{ n.id }}/delete" onsubmit="return confirm('Delete this note?')">
+                        <button type="submit" class="btn btn-danger">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+<div class="empty-state">No notes yet.</div>
+{% endif %}
+</div>
+
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
     <div class="card">
         <h2>Approval Risk Mix</h2>
@@ -136,6 +173,36 @@
                 <td>{{ alert.value }}</td>
                 <td>{{ alert.threshold }}</td>
                 <td><span class="badge status-{{ 'critical' if alert.severity == 'critical' else 'high' }}">{{ alert.severity }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if timeline %}
+<div class="card">
+    <h2>Timeline</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Kind</th>
+                <th>Ref</th>
+                <th>Session</th>
+                <th>Severity</th>
+                <th>Summary</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in timeline[:120] %}
+            <tr>
+                <td>{{ item.ts | format_ts }}</td>
+                <td>{{ item.kind }}</td>
+                <td class="mono">{{ item.ref_id }}</td>
+                <td class="mono">{{ item.session_id or "-" }}</td>
+                <td>{{ item.severity }}</td>
+                <td>{{ item.summary }}</td>
             </tr>
             {% endfor %}
         </tbody>

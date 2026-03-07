@@ -138,6 +138,14 @@ def init_db():
             note TEXT DEFAULT ''
         );
 
+        CREATE TABLE IF NOT EXISTS campaign_notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            author TEXT DEFAULT 'operator',
+            note TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -147,6 +155,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approval_requests(created_at);
         CREATE INDEX IF NOT EXISTS idx_immutable_timestamp ON immutable_audit(timestamp);
         CREATE INDEX IF NOT EXISTS idx_policy_updated_at ON campaign_policies(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_campaign_notes_campaign ON campaign_notes(campaign);
+        CREATE INDEX IF NOT EXISTS idx_campaign_notes_created_at ON campaign_notes(created_at);
     """)
     _ensure_sessions_columns(db)
     _ensure_campaign_policy_columns(db)
@@ -814,6 +824,120 @@ def evaluate_campaign_policy_alerts(campaign=None):
                     }
                 )
     return alerts
+
+
+def get_campaign_timeline(campaign, limit=200):
+    """Unified timeline for a campaign across events, tasks, and approvals."""
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT * FROM (
+            SELECT
+                e.timestamp AS ts,
+                'event' AS kind,
+                CAST(e.id AS TEXT) AS ref_id,
+                e.session_id AS session_id,
+                e.level AS severity,
+                e.source || ': ' || e.message AS summary
+            FROM event_log e
+            LEFT JOIN sessions s ON s.id = e.session_id
+            WHERE s.campaign=?
+
+            UNION ALL
+
+            SELECT
+                t.created_at AS ts,
+                'task' AS kind,
+                t.id AS ref_id,
+                t.session_id AS session_id,
+                t.status AS severity,
+                t.task_type AS summary
+            FROM tasks t
+            LEFT JOIN sessions s ON s.id = t.session_id
+            WHERE s.campaign=?
+
+            UNION ALL
+
+            SELECT
+                a.created_at AS ts,
+                'approval' AS kind,
+                a.id AS ref_id,
+                a.session_id AS session_id,
+                a.risk_level AS severity,
+                a.action AS summary
+            FROM approval_requests a
+            LEFT JOIN sessions s ON s.id = a.session_id
+            WHERE s.campaign=?
+
+            UNION ALL
+
+            SELECT
+                n.created_at AS ts,
+                'note' AS kind,
+                CAST(n.id AS TEXT) AS ref_id,
+                NULL AS session_id,
+                n.author AS severity,
+                n.note AS summary
+            FROM campaign_notes n
+            WHERE n.campaign=?
+        )
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (campaign, campaign, campaign, campaign, limit),
+    ).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+
+def add_campaign_note(campaign, note, author="operator"):
+    """Append an operator note to a campaign timeline."""
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO campaign_notes (campaign, created_at, author, note)
+        VALUES (?, ?, ?, ?)
+        """,
+        (campaign, time.time(), author, note),
+    )
+    db.commit()
+    db.close()
+
+
+def list_campaign_notes(campaign=None, limit=100):
+    """List campaign notes, optionally filtered by campaign."""
+    db = get_db()
+    if campaign:
+        rows = db.execute(
+            """
+            SELECT * FROM campaign_notes
+            WHERE campaign=?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (campaign, limit),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            """
+            SELECT * FROM campaign_notes
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    db.close()
+    return [dict(r) for r in rows]
+
+
+def delete_campaign_note(note_id):
+    """Delete one campaign note by ID."""
+    db = get_db()
+    db.execute("DELETE FROM campaign_notes WHERE id=?", (note_id,))
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
 
 
 # Initialize DB on import

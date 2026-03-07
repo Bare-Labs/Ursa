@@ -12,6 +12,10 @@ Tools:
         - ursa_sessions      — List all active/stale/dead sessions
         - ursa_session_info  — Get detailed info on a session
         - ursa_set_session_context — Set campaign/tags on a session
+        - ursa_campaign_info — Get campaign summary
+        - ursa_campaign_timeline — Get campaign timeline
+        - ursa_campaign_add_note — Add campaign note
+        - ursa_campaign_notes — List campaign notes
         - ursa_kill_session  — Kill a session
 
     Tasking:
@@ -62,14 +66,18 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from major.db import (  # noqa: E402
+    add_campaign_note,
+    delete_campaign_note,
     delete_campaign_policy,
     evaluate_campaign_policy_alerts,
+    get_campaign_timeline,
     get_events,
     get_immutable_audit,
     get_session,
     get_task,
     kill_session,
     list_approval_requests,
+    list_campaign_notes,
     list_campaign_policies,
     list_files,
     list_sessions,
@@ -721,6 +729,7 @@ def ursa_campaign_report(campaign: str, output_format: str = "json") -> str:
     sessions = list_sessions(campaign=campaign_name)
     tasks = list_tasks(campaign=campaign_name, limit=5000)
     events = get_events(campaign=campaign_name, limit=5000)
+    notes = list_campaign_notes(campaign=campaign_name, limit=2000)
 
     reports_dir = PROJECT_ROOT / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -735,10 +744,12 @@ def ursa_campaign_report(campaign: str, output_format: str = "json") -> str:
                 "sessions": len(sessions),
                 "tasks": len(tasks),
                 "events": len(events),
+                "notes": len(notes),
             },
             "sessions": sessions,
             "tasks": tasks,
             "events": events,
+            "notes": notes,
         }
         out_path = reports_dir / f"campaign_{safe_name}_{ts}.json"
         with open(out_path, "w", encoding="utf-8") as f:
@@ -754,6 +765,8 @@ def ursa_campaign_report(campaign: str, output_format: str = "json") -> str:
                 writer.writerow(["task", t["id"], t.get("session_id", ""), t.get("task_type", ""), t.get("status", ""), ""])
             for e in events:
                 writer.writerow(["event", e["id"], e.get("session_id", ""), e.get("source", ""), e.get("level", ""), e.get("message", "")])
+            for n in notes:
+                writer.writerow(["note", n["id"], "", n.get("author", ""), "info", n.get("note", "")])
 
     return (
         f"Campaign report exported.\n"
@@ -778,7 +791,8 @@ def ursa_campaign_info(campaign: str) -> str:
     tasks = list_tasks(campaign=campaign_name, limit=200)
     events = get_events(campaign=campaign_name, limit=200)
     approvals = list_approval_requests(status="pending", campaign=campaign_name, limit=200)
-    if not sessions and not tasks and not events and not approvals:
+    notes = list_campaign_notes(campaign=campaign_name, limit=200)
+    if not sessions and not tasks and not events and not approvals and not notes:
         return f"No activity found for campaign '{campaign_name}'."
 
     by_status: dict[str, int] = {}
@@ -802,6 +816,7 @@ def ursa_campaign_info(campaign: str) -> str:
         f"Tasks (recent):    {len(tasks)}",
         f"Events (recent):   {len(events)}",
         f"Pending approvals: {len(approvals)}",
+        f"Notes:             {len(notes)}",
         "",
         "Session Status:",
     ]
@@ -835,7 +850,130 @@ def ursa_campaign_info(campaign: str) -> str:
                 f"  {s['id']} {s['username']}@{s['hostname']} "
                 f"({s['remote_ip']}) {s['status']}"
             )
+    if notes:
+        lines.append("")
+        lines.append("Recent Notes:")
+        for n in notes[:10]:
+            lines.append(f"  [{_format_time(n['created_at'])}] {n['author']}: {n['note']}")
     return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_timeline(campaign: str, limit: int = 100) -> str:
+    """
+    Show unified campaign timeline (events, tasks, approvals).
+    """
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    rows = get_campaign_timeline(name, limit=max(1, min(limit, 500)))
+    if not rows:
+        return f"No timeline entries for campaign '{name}'."
+
+    lines = [
+        f"CAMPAIGN TIMELINE: {name}",
+        "=" * 70,
+        f"{'Time':<19} {'Kind':<10} {'Ref':<10} {'Severity':<12} {'Summary'}",
+        "-" * 100,
+    ]
+    for row in rows:
+        ts = datetime.fromtimestamp(row["ts"]).strftime("%Y-%m-%d %H:%M:%S")
+        lines.append(
+            f"{ts:<19} {row['kind']:<10} {row['ref_id'][:10]:<10} "
+            f"{str(row.get('severity', ''))[:12]:<12} {row.get('summary', '')}"
+        )
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_add_note(campaign: str, note: str, author: str = "mcp:operator") -> str:
+    """Add an operator note to a campaign."""
+    name = campaign.strip()
+    text = note.strip()
+    if not name:
+        return "Campaign is required."
+    if not text:
+        return "Note is required."
+    add_campaign_note(name, text, author=author.strip() or "mcp:operator")
+    return f"Added note to campaign {name}."
+
+
+@mcp_server.tool()
+def ursa_campaign_notes(campaign: str, limit: int = 30) -> str:
+    """List recent campaign notes."""
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    rows = list_campaign_notes(campaign=name, limit=max(1, min(limit, 200)))
+    if not rows:
+        return f"No notes for campaign '{name}'."
+    lines = [f"CAMPAIGN NOTES: {name}", "=" * 70]
+    for row in rows:
+        lines.append(f"[{_format_time(row['created_at'])}] {row['author']}: {row['note']}")
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_handoff(campaign: str) -> str:
+    """
+    Generate a concise handoff brief for a campaign.
+    """
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    sessions = list_sessions(campaign=name)
+    tasks = list_tasks(campaign=name, limit=300)
+    events = get_events(campaign=name, limit=300)
+    approvals = list_approval_requests(status="pending", campaign=name, limit=300)
+    notes = list_campaign_notes(campaign=name, limit=50)
+    alerts = evaluate_campaign_policy_alerts(campaign=name)
+
+    by_status: dict[str, int] = {}
+    for s in sessions:
+        st = s.get("status", "unknown")
+        by_status[st] = by_status.get(st, 0) + 1
+
+    lines = [
+        f"HANDOFF BRIEF: {name}",
+        "=" * 60,
+        f"Sessions: {len(sessions)}  Tasks: {len(tasks)}  Events: {len(events)}",
+        f"Pending Approvals: {len(approvals)}  Policy Alerts: {len(alerts)}",
+        "",
+        "Session Status:",
+    ]
+    for key, count in sorted(by_status.items()):
+        lines.append(f"  {key}: {count}")
+
+    if approvals:
+        lines.extend(["", "Top Pending Approvals:"])
+        for a in approvals[:10]:
+            lines.append(
+                f"  {a['id']} risk={a['risk_level']} action={a['action']} session={a.get('session_id') or '-'}"
+            )
+
+    if alerts:
+        lines.extend(["", "Active Policy Alerts:"])
+        for a in alerts[:10]:
+            lines.append(
+                f"  {a['metric']} {a['value']}>{a['threshold']} severity={a['severity']}"
+            )
+
+    if notes:
+        lines.extend(["", "Recent Notes:"])
+        for n in notes[:10]:
+            lines.append(f"  [{_format_time(n['created_at'])}] {n['author']}: {n['note']}")
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_delete_note(campaign: str, note_id: int) -> str:
+    """Delete one campaign note by ID."""
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    deleted = delete_campaign_note(note_id)
+    return f"Deleted note {note_id} from {name}." if deleted else f"Note {note_id} not found."
 
 
 # ── Governance ──

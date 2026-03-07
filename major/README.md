@@ -70,6 +70,11 @@ When accessed via MCP (through the root `server.py`), operators get these tools:
 - `ursa_campaigns` — Campaign summary (sessions/tasks/events)
 - `ursa_campaign_report` — Export campaign report as JSON/CSV
 - `ursa_campaign_info` — Detailed single-campaign operational context
+- `ursa_campaign_timeline` — Unified timeline of events/tasks/approvals for a campaign
+- `ursa_campaign_add_note` — Add campaign operator note
+- `ursa_campaign_notes` — List recent campaign notes
+- `ursa_campaign_delete_note` — Delete campaign note by ID
+- `ursa_campaign_handoff` — Generate campaign handoff brief
 - `ursa_kill_session` — Terminate a session
 
 **Tasking:**

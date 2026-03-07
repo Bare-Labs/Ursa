@@ -342,3 +342,41 @@ class TestCampaignPolicies:
         assert db.get_campaign_policy("ALPHA") is not None
         assert db.delete_campaign_policy("ALPHA") is True
         assert db.get_campaign_policy("ALPHA") is None
+
+
+class TestCampaignTimeline:
+
+    def test_get_campaign_timeline_includes_events_tasks_approvals(self, tmp_db):
+        sid = db.create_session("10.0.0.1", campaign="ALPHA")
+        task_id = db.create_task(sid, "whoami")
+        approval_id = db.create_approval_request("queue_task", "high", session_id=sid, task_type="download")
+        db.log_event("info", "test", "timeline event", session_id=sid)
+        db.add_campaign_note("ALPHA", "timeline note", author="tester")
+
+        rows = db.get_campaign_timeline("ALPHA", limit=50)
+        kinds = {r["kind"] for r in rows}
+        assert "task" in kinds
+        assert "approval" in kinds
+        assert "event" in kinds
+        assert "note" in kinds
+        assert any(r["ref_id"] == task_id for r in rows)
+        assert any(r["ref_id"] == approval_id for r in rows)
+
+
+class TestCampaignNotes:
+
+    def test_add_and_list_campaign_notes(self, tmp_db):
+        db.add_campaign_note("ALPHA", "first note", author="tester")
+        db.add_campaign_note("ALPHA", "second note", author="tester")
+        notes = db.list_campaign_notes(campaign="ALPHA", limit=10)
+        assert len(notes) == 2
+        assert notes[0]["note"] == "second note"
+        assert notes[1]["note"] == "first note"
+
+    def test_delete_campaign_note(self, tmp_db):
+        db.add_campaign_note("ALPHA", "delete me", author="tester")
+        notes = db.list_campaign_notes(campaign="ALPHA", limit=10)
+        note_id = notes[0]["id"]
+        assert db.delete_campaign_note(note_id) is True
+        notes_after = db.list_campaign_notes(campaign="ALPHA", limit=10)
+        assert all(n["id"] != note_id for n in notes_after)
