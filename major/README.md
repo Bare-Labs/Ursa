@@ -46,6 +46,11 @@ When accessed via MCP (through the root `server.py`), operators get these tools:
 - `ursa_stop_c2` — Stop the C2 server
 - `ursa_c2_status` — Check if C2 is running, show stats
 - `ursa_events` — View the C2 event log
+- `ursa_policy_matrix` — View risk policy mapping for task types
+- `ursa_approvals` — List pending/approved/rejected step-up approvals
+- `ursa_approve` — Approve a pending request and queue its task
+- `ursa_reject` — Reject a pending request
+- `ursa_audit_integrity` — Verify immutable audit chain integrity
 
 **Session Management:**
 - `ursa_sessions` — List all sessions (active/stale/dead)
@@ -82,6 +87,8 @@ Ursa Major uses SQLite (WAL mode) with these tables:
 | `files` | Transferred files — filename, direction, size, binary data |
 | `listeners` | Listener configurations |
 | `event_log` | Audit trail of all C2 operations |
+| `approval_requests` | Step-up approvals for high-risk actions |
+| `immutable_audit` | Hash-chained immutable governance/audit records |
 
 The database is created automatically on first run. It is excluded from version control (`.gitignore`) since it contains operational data.
 

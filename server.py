@@ -303,6 +303,8 @@ def ursa_kill_session(session_id: str) -> str:
             f"Approval ID: {decision['approval_id']}\n"
             f"Use ursa_approve('{decision['approval_id']}') to proceed."
         )
+    if decision["status"] != "queued":
+        return f"Kill action denied: {decision['message']}"
     kill_session(session_id)
     return (
         f"Session {session_id} ({s['username']}@{s['hostname']}) killed.\n"
@@ -343,6 +345,8 @@ def ursa_shell(session_id: str, command: str) -> str:
             f"Approval ID: {decision['approval_id']}\n"
             f"{decision['message']}"
         )
+    if decision["status"] != "queued":
+        return f"Shell task denied: {decision['message']}"
     task_id = decision["task_id"]
     return (f"Shell task queued: {task_id}\n"
             f"Target: {s['username']}@{s['hostname']}\n"
@@ -385,6 +389,8 @@ def ursa_task(session_id: str, task_type: str, args: str = "{}") -> str:
             f"Type: {task_type}\n"
             f"Args: {json.dumps(task_args)}"
         )
+    if decision["status"] != "queued":
+        return f"Task denied: {decision['message']}"
     task_id = decision["task_id"]
     return (f"Task queued: {task_id}\n"
             f"Type: {task_type}\n"
@@ -488,6 +494,8 @@ def ursa_download(session_id: str, remote_path: str) -> str:
             f"Download task requires approval ({decision['risk_level']} risk).\n"
             f"Approval ID: {decision['approval_id']}"
         )
+    if decision["status"] != "queued":
+        return f"Download task denied: {decision['message']}"
     task_id = decision["task_id"]
     return (f"Download task queued: {task_id}\n"
             f"Target file: {remote_path}\n"
@@ -526,6 +534,8 @@ def ursa_upload(session_id: str, local_path: str, remote_path: str) -> str:
             f"Upload task requires approval ({decision['risk_level']} risk).\n"
             f"Approval ID: {decision['approval_id']}"
         )
+    if decision["status"] != "queued":
+        return f"Upload task denied: {decision['message']}"
     task_id = decision["task_id"]
     return (f"Upload task queued: {task_id}\n"
             f"File: {local_path} ({len(data)} bytes) → {remote_path}")

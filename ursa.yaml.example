@@ -22,6 +22,14 @@ major:
     beacon_interval: 5              # Seconds between beacons
     jitter: 0.1                     # 0.0-1.0 randomization factor
 
+  # Governance controls
+  governance:
+    bearclaw_mode: "local"          # local | disabled
+    require_step_up_approval: false # true => high/critical tasks need approval
+    step_up_risks:                  # Risk tiers gated when step-up is enabled
+      - "high"
+      - "critical"
+
 minor:
   # Scan defaults
   default_timeout: 3                # Default timeout for network operations

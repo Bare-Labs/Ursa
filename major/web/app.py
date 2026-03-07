@@ -1,10 +1,10 @@
 """Ursa Major — Web UI Application."""
 
+import json
 import sys
 import time
-import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -85,11 +85,20 @@ templates.env.filters["filesizeformat"] = filesizeformat
 
 # -- Register Routers --
 
-from major.web.routes import dashboard, sessions, tasks, files, events, sse  # noqa: E402
+from major.web.routes import (  # noqa: E402
+    dashboard,
+    events,
+    files,
+    governance,
+    sessions,
+    sse,
+    tasks,
+)
 
 app.include_router(dashboard.router)
 app.include_router(sessions.router)
 app.include_router(tasks.router)
 app.include_router(files.router)
 app.include_router(events.router)
+app.include_router(governance.router)
 app.include_router(sse.router)

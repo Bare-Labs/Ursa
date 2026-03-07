@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Governance — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Governance</h1>
+    <div class="filter-group">
+        <a href="/governance/?status=pending" class="filter-btn {% if current_status == 'pending' %}active{% endif %}">Pending</a>
+        <a href="/governance/?status=approved" class="filter-btn {% if current_status == 'approved' %}active{% endif %}">Approved</a>
+        <a href="/governance/?status=rejected" class="filter-btn {% if current_status == 'rejected' %}active{% endif %}">Rejected</a>
+    </div>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value" style="color: {% if audit_check.ok %}var(--green){% else %}var(--red){% endif %}">
+            {% if audit_check.ok %}OK{% else %}FAIL{% endif %}
+        </div>
+        <div class="stat-label">Audit Integrity</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ approvals|length }}</div>
+        <div class="stat-label">{{ current_status|upper }} Approvals</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ audit_check.checked }}</div>
+        <div class="stat-label">Events Verified</div>
+    </div>
+</div>
+
+<div class="card">
+    <h2>Step-up Approvals</h2>
+    {% if approvals %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Risk</th>
+                <th>Action</th>
+                <th>Session</th>
+                <th>Requested By</th>
+                <th>Created</th>
+                <th>Reason</th>
+                {% if current_status == 'pending' %}<th>Decision</th>{% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in approvals %}
+            <tr>
+                <td class="mono">{{ a.id }}</td>
+                <td><span class="badge status-{{ a.risk_level }}">{{ a.risk_level }}</span></td>
+                <td class="mono">{{ a.action }}</td>
+                <td class="mono">{{ a.session_id or "-" }}</td>
+                <td class="mono">{{ a.requested_by }}</td>
+                <td>{{ a.created_at | time_ago }}</td>
+                <td>{{ a.reason }}</td>
+                {% if current_status == 'pending' %}
+                <td>
+                    <div style="display:flex; gap:6px;">
+                        <form method="post" action="/governance/approvals/{{ a.id }}/approve">
+                            <button class="btn" type="submit">Approve</button>
+                        </form>
+                        <form method="post" action="/governance/approvals/{{ a.id }}/reject">
+                            <button class="btn btn-danger" type="submit">Reject</button>
+                        </form>
+                    </div>
+                </td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No {{ current_status }} approvals.</div>
+    {% endif %}
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="card">
+        <h2>Policy Matrix</h2>
+        <pre class="task-output">{{ risk_matrix }}</pre>
+    </div>
+    <div class="card">
+        <h2>Recent Immutable Audit</h2>
+        {% if audit_events %}
+            {% for e in audit_events[:25] %}
+            <div class="event-row">
+                <span class="event-time">{{ e.timestamp | format_ts }}</span>
+                <span class="event-source">{{ e.actor }}</span>
+                <span class="event-message">{{ e.action }} / {{ e.policy_result }} / {{ e.risk_level }}</span>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="empty-state">No immutable audit events.</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

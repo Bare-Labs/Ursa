@@ -100,6 +100,10 @@ body {
 .status-in-progress, .status-in_progress { background: rgba(188, 140, 255, 0.15); color: var(--purple); }
 .status-completed { background: rgba(63, 185, 80, 0.15); color: var(--green); }
 .status-error { background: rgba(248, 81, 73, 0.15); color: var(--red); }
+.status-low { background: rgba(63, 185, 80, 0.15); color: var(--green); }
+.status-medium { background: rgba(88, 166, 255, 0.15); color: var(--accent); }
+.status-high { background: rgba(210, 153, 34, 0.15); color: var(--yellow); }
+.status-critical { background: rgba(248, 81, 73, 0.15); color: var(--red); }
 
 /* Tables */
 table { width: 100%; border-collapse: collapse; }

@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from major.config import get_config
-from major.db import append_immutable_audit_event, create_approval_request, create_task
+from major.db import (
+    append_immutable_audit_event,
+    create_approval_request,
+    create_task,
+    get_approval_request,
+)
 
 RISK_MATRIX: dict[str, str] = {
     "sysinfo": "low",
@@ -108,6 +113,33 @@ def enforce_bearclaw_policy(
             reason=f"Step-up approval is required for {risk_level}-risk action.",
         )
 
+    if step_up_enabled and risk_level in step_up_risks and approval_id:
+        approval = get_approval_request(approval_id)
+        if not approval:
+            return PolicyDecision(
+                allowed=False,
+                requires_approval=False,
+                risk_level=risk_level,
+                policy_result="deny",
+                reason=f"Approval {approval_id} was not found.",
+            )
+        if approval.get("status") != "approved":
+            return PolicyDecision(
+                allowed=False,
+                requires_approval=False,
+                risk_level=risk_level,
+                policy_result="deny",
+                reason=f"Approval {approval_id} is not approved.",
+            )
+        if approval.get("task_type") and approval.get("task_type") != task_type:
+            return PolicyDecision(
+                allowed=False,
+                requires_approval=False,
+                risk_level=risk_level,
+                policy_result="deny",
+                reason=f"Approval {approval_id} does not match task type {task_type}.",
+            )
+
     return PolicyDecision(
         allowed=True,
         requires_approval=False,
@@ -168,6 +200,22 @@ def queue_task_with_policy(
         return {
             "status": "approval_required",
             "approval_id": approval_id,
+            "risk_level": decision.risk_level,
+            "message": decision.reason,
+        }
+
+    if not decision.allowed:
+        append_immutable_audit_event(
+            actor=actor,
+            action="queue_task",
+            session_id=session_id,
+            approval_id=approval_id,
+            risk_level=decision.risk_level,
+            policy_result=decision.policy_result,
+            details={**audit_details, "status": "denied"},
+        )
+        return {
+            "status": "denied",
             "risk_level": decision.risk_level,
             "message": decision.reason,
         }

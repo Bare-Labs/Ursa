@@ -65,7 +65,8 @@ async def create_session_task(request: Request, session_id: str):
         actor="web-ui:sessions/task",
     )
     if decision["status"] != "queued":
-        raise HTTPException(403, f"{decision['message']} (approval_id={decision['approval_id']})")
+        approval_id = decision.get("approval_id", "-")
+        raise HTTPException(403, f"{decision['message']} (approval_id={approval_id})")
     task_id = decision["task_id"]
     task = get_task(task_id)
 
@@ -83,7 +84,8 @@ async def kill_session_route(request: Request, session_id: str):
         actor="web-ui:sessions/kill",
     )
     if decision["status"] != "queued":
-        raise HTTPException(403, f"{decision['message']} (approval_id={decision['approval_id']})")
+        approval_id = decision.get("approval_id", "-")
+        raise HTTPException(403, f"{decision['message']} (approval_id={approval_id})")
     kill_session(session_id)
 
     response = Response(status_code=200)
