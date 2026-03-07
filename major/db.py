@@ -132,6 +132,7 @@ def init_db():
             max_pending_total INTEGER DEFAULT 20,
             max_pending_high INTEGER DEFAULT 10,
             max_pending_critical INTEGER DEFAULT 2,
+            max_oldest_pending_minutes INTEGER DEFAULT 60,
             updated_at REAL NOT NULL,
             updated_by TEXT DEFAULT 'operator',
             note TEXT DEFAULT ''
@@ -148,6 +149,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_policy_updated_at ON campaign_policies(updated_at);
     """)
     _ensure_sessions_columns(db)
+    _ensure_campaign_policy_columns(db)
     db.commit()
     db.close()
 
@@ -577,6 +579,15 @@ def _ensure_sessions_columns(db):
         db.execute("ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT ''")
 
 
+def _ensure_campaign_policy_columns(db):
+    """Best-effort migration for campaign policy additive columns."""
+    columns = {r[1] for r in db.execute("PRAGMA table_info(campaign_policies)").fetchall()}
+    if "max_oldest_pending_minutes" not in columns:
+        db.execute(
+            "ALTER TABLE campaign_policies ADD COLUMN max_oldest_pending_minutes INTEGER DEFAULT 60"
+        )
+
+
 def append_immutable_audit_event(
     *,
     actor,
@@ -688,6 +699,7 @@ def upsert_campaign_policy(
     max_pending_total=20,
     max_pending_high=10,
     max_pending_critical=2,
+    max_oldest_pending_minutes=60,
     updated_by="operator",
     note="",
 ):
@@ -696,14 +708,15 @@ def upsert_campaign_policy(
     db.execute(
         """
         INSERT INTO campaign_policies (
-            campaign, max_pending_total, max_pending_high, max_pending_critical,
+            campaign, max_pending_total, max_pending_high, max_pending_critical, max_oldest_pending_minutes,
             updated_at, updated_by, note
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(campaign) DO UPDATE SET
             max_pending_total=excluded.max_pending_total,
             max_pending_high=excluded.max_pending_high,
             max_pending_critical=excluded.max_pending_critical,
+            max_oldest_pending_minutes=excluded.max_oldest_pending_minutes,
             updated_at=excluded.updated_at,
             updated_by=excluded.updated_by,
             note=excluded.note
@@ -713,6 +726,7 @@ def upsert_campaign_policy(
             max_pending_total,
             max_pending_high,
             max_pending_critical,
+            max_oldest_pending_minutes,
             time.time(),
             updated_by,
             note,
@@ -758,25 +772,35 @@ def evaluate_campaign_policy_alerts(campaign=None):
         return []
 
     pending = list_approval_requests(status="pending", limit=10000)
-    counts: dict[str, dict[str, int]] = {}
+    counts: dict[str, dict[str, float]] = {}
+    now = time.time()
     for row in pending:
         name = (row.get("campaign") or "unassigned").strip() or "unassigned"
-        info = counts.setdefault(name, {"total": 0, "high": 0, "critical": 0})
+        info = counts.setdefault(name, {"total": 0, "high": 0, "critical": 0, "oldest_age_minutes": 0.0})
         info["total"] += 1
         risk = (row.get("risk_level") or "").lower()
         if risk == "high":
             info["high"] += 1
         elif risk == "critical":
             info["critical"] += 1
+        age_minutes = max(0.0, (now - float(row.get("created_at") or now)) / 60.0)
+        if age_minutes > info["oldest_age_minutes"]:
+            info["oldest_age_minutes"] = age_minutes
 
     alerts = []
     for policy in policies:
         name = policy["campaign"]
-        c = counts.get(name, {"total": 0, "high": 0, "critical": 0})
+        c = counts.get(name, {"total": 0, "high": 0, "critical": 0, "oldest_age_minutes": 0.0})
         checks = [
             ("total", c["total"], int(policy["max_pending_total"]), "warning"),
             ("high", c["high"], int(policy["max_pending_high"]), "warning"),
             ("critical", c["critical"], int(policy["max_pending_critical"]), "critical"),
+            (
+                "oldest_age_minutes",
+                int(c["oldest_age_minutes"]),
+                int(policy["max_oldest_pending_minutes"]),
+                "warning",
+            ),
         ]
         for metric, value, threshold, severity in checks:
             if value > threshold:

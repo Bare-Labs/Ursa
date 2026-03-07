@@ -48,8 +48,9 @@ When accessed via MCP (through the root `server.py`), operators get these tools:
 - `ursa_events` — View the C2 event log
 - `ursa_policy_matrix` — View risk policy mapping for task types
 - `ursa_governance_summary` — Pending approvals summary by risk/campaign (filterable)
-- `ursa_set_campaign_policy` — Configure campaign approval-alert thresholds
+- `ursa_set_campaign_policy` — Configure campaign approval-alert thresholds (including oldest pending age)
 - `ursa_campaign_policies` — List campaign threshold policies
+- `ursa_delete_campaign_policy` — Delete campaign threshold policy
 - `ursa_campaign_alerts` — Show active campaign policy threshold alerts
 - `ursa_policy_remediation_plan` — Suggested actions for active policy alerts
 - `ursa_preview_policy_remediation` — Dry-run remediation impact by strategy

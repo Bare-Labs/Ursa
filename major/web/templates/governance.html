@@ -49,6 +49,7 @@
             <input type="text" name="max_pending_total" placeholder="max total" value="20">
             <input type="text" name="max_pending_high" placeholder="max high" value="10">
             <input type="text" name="max_pending_critical" placeholder="max critical" value="2">
+            <input type="text" name="max_oldest_pending_minutes" placeholder="max oldest min" value="60">
             <button type="submit">Save Policy</button>
         </form>
         {% if policies %}
@@ -59,6 +60,8 @@
                     <th>Total</th>
                     <th>High</th>
                     <th>Critical</th>
+                    <th>Oldest Min</th>
+                    <th></th>
                 </tr>
             </thead>
             <tbody>
@@ -68,6 +71,13 @@
                     <td>{{ p.max_pending_total }}</td>
                     <td>{{ p.max_pending_high }}</td>
                     <td>{{ p.max_pending_critical }}</td>
+                    <td>{{ p.max_oldest_pending_minutes }}</td>
+                    <td>
+                        <form method="post" action="/governance/policy/delete" onsubmit="return confirm('Delete policy for {{ p.campaign }}?')">
+                            <input type="hidden" name="campaign" value="{{ p.campaign }}">
+                            <button type="submit" class="btn btn-danger">Delete</button>
+                        </form>
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import Response
 
 from major.db import (
+    delete_campaign_policy,
     evaluate_campaign_policy_alerts,
     get_immutable_audit,
     list_approval_requests,
@@ -156,6 +157,7 @@ async def upsert_policy(
     max_pending_total: int = Form(default=20),
     max_pending_high: int = Form(default=10),
     max_pending_critical: int = Form(default=2),
+    max_oldest_pending_minutes: int = Form(default=60),
     note: str = Form(default=""),
 ):
     name = campaign.strip()
@@ -166,11 +168,23 @@ async def upsert_policy(
         max_pending_total=max_pending_total,
         max_pending_high=max_pending_high,
         max_pending_critical=max_pending_critical,
+        max_oldest_pending_minutes=max_oldest_pending_minutes,
         updated_by="web-ui:policy",
         note=note,
     )
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = f"/governance/?status=pending&campaign={name}"
+    return response
+
+
+@router.post("/policy/delete")
+async def delete_policy(campaign: str = Form(...)):
+    name = campaign.strip()
+    if not name:
+        raise HTTPException(400, "Campaign is required")
+    _ = delete_campaign_policy(name)
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = "/governance/?status=pending"
     return response
 
 
@@ -278,7 +292,10 @@ async def governance_report(format: str = "json"):
                     "policy",
                     p["campaign"],
                     "thresholds",
-                    f"total={p['max_pending_total']} high={p['max_pending_high']} critical={p['max_pending_critical']}",
+                    (
+                        f"total={p['max_pending_total']} high={p['max_pending_high']} "
+                        f"critical={p['max_pending_critical']} oldest_min={p['max_oldest_pending_minutes']}"
+                    ),
                     p.get("note", ""),
                 ]
             )

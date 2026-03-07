@@ -62,6 +62,7 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from major.db import (  # noqa: E402
+    delete_campaign_policy,
     evaluate_campaign_policy_alerts,
     get_events,
     get_immutable_audit,
@@ -903,6 +904,7 @@ def ursa_set_campaign_policy(
     max_pending_total: int = 20,
     max_pending_high: int = 10,
     max_pending_critical: int = 2,
+    max_oldest_pending_minutes: int = 60,
     note: str = "",
 ) -> str:
     """
@@ -913,6 +915,7 @@ def ursa_set_campaign_policy(
         max_pending_total: Max pending approvals before alert.
         max_pending_high: Max pending high-risk approvals before alert.
         max_pending_critical: Max pending critical approvals before alert.
+        max_oldest_pending_minutes: Max age for oldest pending approval before alert.
         note: Optional policy note.
     """
     name = campaign.strip()
@@ -923,6 +926,7 @@ def ursa_set_campaign_policy(
         max_pending_total=max_pending_total,
         max_pending_high=max_pending_high,
         max_pending_critical=max_pending_critical,
+        max_oldest_pending_minutes=max_oldest_pending_minutes,
         updated_by="mcp:ursa_set_campaign_policy",
         note=note,
     )
@@ -930,7 +934,8 @@ def ursa_set_campaign_policy(
         f"Policy updated for {name}.\n"
         f"max_pending_total={policy['max_pending_total']}\n"
         f"max_pending_high={policy['max_pending_high']}\n"
-        f"max_pending_critical={policy['max_pending_critical']}"
+        f"max_pending_critical={policy['max_pending_critical']}\n"
+        f"max_oldest_pending_minutes={policy['max_oldest_pending_minutes']}"
     )
 
 
@@ -941,15 +946,26 @@ def ursa_campaign_policies() -> str:
     if not rows:
         return "No campaign policies configured."
     lines = [
-        f"{'Campaign':<20} {'Total':<8} {'High':<8} {'Critical':<8} {'Updated By'}",
-        "-" * 70,
+        f"{'Campaign':<20} {'Total':<8} {'High':<8} {'Critical':<8} {'OldestMin':<10} {'Updated By'}",
+        "-" * 82,
     ]
     for row in rows:
         lines.append(
             f"{row['campaign'][:20]:<20} {row['max_pending_total']:<8} "
-            f"{row['max_pending_high']:<8} {row['max_pending_critical']:<8} {row['updated_by']}"
+            f"{row['max_pending_high']:<8} {row['max_pending_critical']:<8} "
+            f"{row['max_oldest_pending_minutes']:<10} {row['updated_by']}"
         )
     return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_delete_campaign_policy(campaign: str) -> str:
+    """Delete campaign threshold policy."""
+    name = campaign.strip()
+    if not name:
+        return "Campaign is required."
+    deleted = delete_campaign_policy(name)
+    return f"Deleted campaign policy: {name}" if deleted else f"No policy found for {name}"
 
 
 @mcp_server.tool()

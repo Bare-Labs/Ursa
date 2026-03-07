@@ -29,6 +29,14 @@ dev = [
     "ruff>=0.6",
 ]
 
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+where = [".", "minor/src"]
+include = ["major*", "ursa_minor*"]
+exclude = ["tests*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "minor/src"]

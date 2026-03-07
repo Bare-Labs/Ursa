@@ -289,11 +289,13 @@ class TestCampaignPolicies:
             max_pending_total=5,
             max_pending_high=3,
             max_pending_critical=1,
+            max_oldest_pending_minutes=15,
             updated_by="test",
             note="policy test",
         )
         assert p["campaign"] == "ALPHA"
         assert p["max_pending_total"] == 5
+        assert p["max_oldest_pending_minutes"] == 15
         fetched = db.get_campaign_policy("ALPHA")
         assert fetched is not None
         assert fetched["max_pending_high"] == 3
@@ -313,3 +315,30 @@ class TestCampaignPolicies:
         assert len(alerts) >= 2
         assert any(a["metric"] == "total" for a in alerts)
         assert any(a["metric"] == "critical" for a in alerts)
+
+    def test_evaluate_campaign_policy_alerts_oldest_age(self, tmp_db):
+        sid = db.create_session("10.0.0.1", campaign="ALPHA")
+        db.upsert_campaign_policy(
+            campaign="ALPHA",
+            max_pending_total=100,
+            max_pending_high=100,
+            max_pending_critical=100,
+            max_oldest_pending_minutes=1,
+            updated_by="test",
+        )
+        approval_id = db.create_approval_request("queue_task", "high", session_id=sid, task_type="download")
+        conn = db.get_db()
+        conn.execute(
+            "UPDATE approval_requests SET created_at=? WHERE id=?",
+            (time.time() - 180, approval_id),
+        )
+        conn.commit()
+        conn.close()
+        alerts = db.evaluate_campaign_policy_alerts(campaign="ALPHA")
+        assert any(a["metric"] == "oldest_age_minutes" for a in alerts)
+
+    def test_delete_campaign_policy(self, tmp_db):
+        db.upsert_campaign_policy(campaign="ALPHA", updated_by="test")
+        assert db.get_campaign_policy("ALPHA") is not None
+        assert db.delete_campaign_policy("ALPHA") is True
+        assert db.get_campaign_policy("ALPHA") is None
