@@ -1,0 +1,11 @@
+{% for e in events %}
+<div class="event-row">
+    <span class="event-time">{{ e.timestamp | format_ts }}</span>
+    <span class="event-level {{ e.level }}">{{ e.level | upper }}</span>
+    <span class="event-source">{{ e.source }}</span>
+    <span class="event-message">{{ e.message }}</span>
+</div>
+{% endfor %}
+{% if not events %}
+<div class="empty-state">No events</div>
+{% endif %}

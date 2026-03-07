@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Files — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Files</h1>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Filename</th>
+            <th>Session</th>
+            <th>Size</th>
+            <th>Direction</th>
+            <th>Time</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody id="file-table-body"
+           hx-get="/files" hx-trigger="every 10s" hx-swap="innerHTML">
+        {% include "partials/file_table.html" %}
+    </tbody>
+</table>
+
+{% if not files %}
+<div class="empty-state">No files transferred yet</div>
+{% endif %}
+{% endblock %}

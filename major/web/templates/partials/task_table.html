@@ -1,0 +1,24 @@
+{% for t in tasks %}
+<tr>
+    <td class="mono">{{ t.id }}</td>
+    {% if t.session_id %}
+    <td class="mono"><a href="/sessions/{{ t.session_id }}">{{ t.session_id }}</a></td>
+    {% endif %}
+    <td>{{ t.task_type }}</td>
+    <td class="mono" style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+        {% set args = t.args | parse_json %}
+        {% if args.get('command') %}{{ args.command }}{% elif args %}{{ args }}{% endif %}
+    </td>
+    <td><span class="badge {{ t.status | status_color }}">{{ t.status }}</span></td>
+    <td>{{ t.created_at | time_ago }}</td>
+    <td style="max-width: 300px;">
+        {% if t.status == 'completed' and t.result %}
+        <div class="task-output" style="max-height: 80px;">{{ t.result }}</div>
+        {% elif t.status == 'error' and t.error %}
+        <div class="task-output error" style="max-height: 80px;">{{ t.error }}</div>
+        {% elif t.status == 'pending' or t.status == 'in_progress' %}
+        <span style="color: var(--text-muted)">waiting...</span>
+        {% endif %}
+    </td>
+</tr>
+{% endfor %}

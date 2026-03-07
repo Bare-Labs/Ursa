@@ -1,0 +1,59 @@
+# Ursa Configuration
+# ==================
+# Copy to ursa.yaml and customize. All values shown are defaults.
+# Any omitted value falls back to the default automatically.
+
+major:
+  # C2 server
+  host: "0.0.0.0"
+  port: 8443
+  db_path: "major/ursa.db"         # Relative to project root, or absolute path
+  stale_threshold: 300              # Seconds before a session is marked stale
+  reaper_interval: 30               # Seconds between reaper checks
+  server_header: "nginx/1.24.0"    # HTTP Server header for C2 responses
+
+  # Web UI
+  web:
+    host: "0.0.0.0"
+    port: 8080
+
+  # Defaults for new implant sessions
+  implant_defaults:
+    beacon_interval: 5              # Seconds between beacons
+    jitter: 0.1                     # 0.0-1.0 randomization factor
+
+minor:
+  # Scan defaults
+  default_timeout: 3                # Default timeout for network operations
+  scan_threads: 100                 # Threads for port scanning
+  dirbust_threads: 20               # Threads for directory brute-forcing
+  credential_threads: 5             # Threads for credential spraying
+  subdomain_threads: 50             # Threads for subdomain enumeration
+  arp_spoof_max_duration: 300       # Max ARP spoof duration in seconds
+
+  # Scan result storage
+  results_dir: "~/.ursa/results"    # Where scan results are saved
+
+# Operator Profiles
+# -----------------
+# Override any config value per-profile. Activate with --profile <name>.
+#
+# profiles:
+#   field:
+#     major:
+#       host: "10.10.14.5"
+#       port: 443
+#       server_header: "Apache/2.4.41"
+#
+#   lab:
+#     major:
+#       port: 8443
+#       web:
+#         port: 9090
+#
+#   stealth:
+#     major:
+#       server_header: "Microsoft-IIS/10.0"
+#       implant_defaults:
+#         beacon_interval: 30
+#         jitter: 0.5

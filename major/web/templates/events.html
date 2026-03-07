@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Events — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Event Log</h1>
+    <div class="filter-group">
+        <a href="/events" class="filter-btn {% if not current_level %}active{% endif %}"
+           hx-get="/events" hx-target="#event-rows" hx-swap="innerHTML"
+           hx-push-url="/events">All</a>
+        <a href="/events?level=info" class="filter-btn {% if current_level == 'info' %}active{% endif %}"
+           hx-get="/events?level=info" hx-target="#event-rows" hx-swap="innerHTML">Info</a>
+        <a href="/events?level=warning" class="filter-btn {% if current_level == 'warning' %}active{% endif %}"
+           hx-get="/events?level=warning" hx-target="#event-rows" hx-swap="innerHTML">Warning</a>
+        <a href="/events?level=error" class="filter-btn {% if current_level == 'error' %}active{% endif %}"
+           hx-get="/events?level=error" hx-target="#event-rows" hx-swap="innerHTML">Error</a>
+    </div>
+</div>
+
+<div class="card">
+    <div id="event-rows" hx-get="/events{% if current_level %}?level={{ current_level }}{% endif %}"
+         hx-trigger="every 5s" hx-swap="innerHTML">
+        {% include "partials/event_list.html" %}
+    </div>
+</div>
+
+{% if not events %}
+<div class="empty-state">No events logged</div>
+{% endif %}
+{% endblock %}

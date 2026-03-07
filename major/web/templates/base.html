@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Ursa Major{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="logo">URSA MAJOR</div>
+        <a href="/" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
+        <a href="/sessions/" class="nav-link {% if active_page == 'sessions' %}active{% endif %}">Sessions</a>
+        <a href="/tasks/" class="nav-link {% if active_page == 'tasks' %}active{% endif %}">Tasks</a>
+        <a href="/files/" class="nav-link {% if active_page == 'files' %}active{% endif %}">Files</a>
+        <a href="/events/" class="nav-link {% if active_page == 'events' %}active{% endif %}">Events</a>
+    </nav>
+
+    <main class="content">
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Tasks — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Tasks</h1>
+    <div class="filter-group">
+        <a href="/tasks" class="filter-btn {% if not current_status %}active{% endif %}"
+           hx-get="/tasks" hx-target="#task-table-body" hx-swap="innerHTML"
+           hx-push-url="/tasks">All</a>
+        <a href="/tasks?status=pending" class="filter-btn {% if current_status == 'pending' %}active{% endif %}"
+           hx-get="/tasks?status=pending" hx-target="#task-table-body" hx-swap="innerHTML">Pending</a>
+        <a href="/tasks?status=in_progress" class="filter-btn {% if current_status == 'in_progress' %}active{% endif %}"
+           hx-get="/tasks?status=in_progress" hx-target="#task-table-body" hx-swap="innerHTML">In Progress</a>
+        <a href="/tasks?status=completed" class="filter-btn {% if current_status == 'completed' %}active{% endif %}"
+           hx-get="/tasks?status=completed" hx-target="#task-table-body" hx-swap="innerHTML">Completed</a>
+        <a href="/tasks?status=error" class="filter-btn {% if current_status == 'error' %}active{% endif %}"
+           hx-get="/tasks?status=error" hx-target="#task-table-body" hx-swap="innerHTML">Error</a>
+    </div>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Session</th>
+            <th>Type</th>
+            <th>Args</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Result</th>
+        </tr>
+    </thead>
+    <tbody id="task-table-body"
+           hx-get="/tasks{% if current_status %}?status={{ current_status }}{% endif %}"
+           hx-trigger="every 5s" hx-swap="innerHTML">
+        {% include "partials/task_table.html" %}
+    </tbody>
+</table>
+
+{% if not tasks %}
+<div class="empty-state">No tasks found</div>
+{% endif %}
+{% endblock %}

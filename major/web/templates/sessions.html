@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Sessions — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Sessions</h1>
+    <div class="filter-group">
+        <a href="/sessions" class="filter-btn {% if not current_status %}active{% endif %}"
+           hx-get="/sessions" hx-target="#session-table-body" hx-swap="innerHTML"
+           hx-push-url="/sessions">All</a>
+        <a href="/sessions?status=active" class="filter-btn {% if current_status == 'active' %}active{% endif %}"
+           hx-get="/sessions?status=active" hx-target="#session-table-body" hx-swap="innerHTML"
+           hx-push-url="/sessions?status=active">Active</a>
+        <a href="/sessions?status=stale" class="filter-btn {% if current_status == 'stale' %}active{% endif %}"
+           hx-get="/sessions?status=stale" hx-target="#session-table-body" hx-swap="innerHTML"
+           hx-push-url="/sessions?status=stale">Stale</a>
+        <a href="/sessions?status=dead" class="filter-btn {% if current_status == 'dead' %}active{% endif %}"
+           hx-get="/sessions?status=dead" hx-target="#session-table-body" hx-swap="innerHTML"
+           hx-push-url="/sessions?status=dead">Dead</a>
+    </div>
+</div>
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>User@Host</th>
+            <th>IP</th>
+            <th>OS</th>
+            <th>Last Seen</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody id="session-table-body"
+           hx-get="/sessions{% if current_status %}?status={{ current_status }}{% endif %}"
+           hx-trigger="every 5s" hx-swap="innerHTML">
+        {% include "partials/session_table.html" %}
+    </tbody>
+</table>
+
+{% if not sessions %}
+<div class="empty-state">No sessions found</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,11 @@
+<tr>
+    <td class="mono">{{ task.id }}</td>
+    <td>{{ task.task_type }}</td>
+    <td class="mono">
+        {% set args = task.args | parse_json %}
+        {% if args.get('command') %}{{ args.command }}{% elif args %}{{ args }}{% endif %}
+    </td>
+    <td><span class="badge {{ task.status | status_color }}">{{ task.status }}</span></td>
+    <td>{{ task.created_at | time_ago }}</td>
+    <td><span style="color: var(--text-muted)">waiting...</span></td>
+</tr>

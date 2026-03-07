@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+</div>
+
+<div class="stats-grid" id="stats"
+     hx-get="/" hx-trigger="every 10s" hx-select="#stats" hx-swap="outerHTML">
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--green)">{{ active_count }}</div>
+        <div class="stat-label">Active Sessions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--yellow)">{{ stale_count }}</div>
+        <div class="stat-label">Stale Sessions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--gray)">{{ dead_count }}</div>
+        <div class="stat-label">Dead Sessions</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ total_sessions }}</div>
+        <div class="stat-label">Total Sessions</div>
+    </div>
+</div>
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+    <div class="card">
+        <h2>Active Sessions</h2>
+        {% if active_sessions %}
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>User@Host</th>
+                    <th>IP</th>
+                    <th>Last Seen</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in active_sessions %}
+                <tr>
+                    <td class="mono"><a href="/sessions/{{ s.id }}">{{ s.id }}</a></td>
+                    <td class="mono">{{ s.username }}@{{ s.hostname }}</td>
+                    <td class="mono">{{ s.remote_ip }}</td>
+                    <td>{{ s.last_seen | time_ago }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if active_count > 5 %}
+        <div style="margin-top: 8px"><a href="/sessions?status=active">View all {{ active_count }} →</a></div>
+        {% endif %}
+        {% else %}
+        <div class="empty-state">No active sessions</div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Recent Events</h2>
+        <div hx-get="/events/" hx-trigger="every 5s" hx-select="#event-rows" hx-target="#event-rows" hx-swap="outerHTML">
+            <div id="event-rows">
+                {% with events=recent_events %}
+                {% include "partials/event_list.html" %}
+                {% endwith %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if recent_tasks %}
+<div class="card" style="margin-top: 16px;">
+    <h2>Recent Tasks</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Session</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Created</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in recent_tasks %}
+            <tr>
+                <td class="mono">{{ t.id }}</td>
+                <td class="mono"><a href="/sessions/{{ t.session_id }}">{{ t.session_id }}</a></td>
+                <td>{{ t.task_type }}</td>
+                <td><span class="badge {{ t.status | status_color }}">{{ t.status }}</span></td>
+                <td>{{ t.created_at | time_ago }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

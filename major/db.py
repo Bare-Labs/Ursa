@@ -12,8 +12,10 @@ import time
 import uuid
 from pathlib import Path
 
+from major.config import get_config
 
-DB_PATH = Path(__file__).parent / "ursa.db"
+
+DB_PATH = Path(get_config().get("major.db_path"))
 
 
 def get_db():

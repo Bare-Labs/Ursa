@@ -1,0 +1,19 @@
+{% for f in files %}
+<tr>
+    <td class="mono">{{ f.id }}</td>
+    <td class="mono">{{ f.filename }}</td>
+    {% if f.session_id %}
+    <td class="mono"><a href="/sessions/{{ f.session_id }}">{{ f.session_id }}</a></td>
+    {% endif %}
+    <td>{{ f.size | filesizeformat }}</td>
+    <td>
+        {% if f.direction == 'download' %}
+        <span style="color: var(--green)">↓ exfil</span>
+        {% else %}
+        <span style="color: var(--accent)">↑ upload</span>
+        {% endif %}
+    </td>
+    <td>{{ f.created_at | time_ago }}</td>
+    <td><a href="/files/{{ f.id }}/download" class="btn" style="padding: 2px 8px; font-size: 11px;">Download</a></td>
+</tr>
+{% endfor %}

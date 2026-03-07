@@ -1,0 +1,9 @@
+{% if task.status == 'completed' and task.result %}
+<div class="task-output">{{ task.result }}</div>
+{% elif task.status == 'error' and task.error %}
+<div class="task-output error">{{ task.error }}</div>
+{% elif task.status == 'pending' or task.status == 'in_progress' %}
+<span style="color: var(--text-muted)">waiting for result...</span>
+{% else %}
+<span style="color: var(--text-muted)">no output</span>
+{% endif %}
