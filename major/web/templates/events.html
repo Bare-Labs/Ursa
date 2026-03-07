@@ -17,8 +17,15 @@
     </div>
 </div>
 
+<form class="shell-form" method="get" action="/events/" style="margin-bottom: 12px;">
+    <input type="text" name="campaign" placeholder="Campaign" value="{{ current_campaign or '' }}">
+    <input type="text" name="tag" placeholder="Tag" value="{{ current_tag or '' }}">
+    {% if current_level %}<input type="hidden" name="level" value="{{ current_level }}">{% endif %}
+    <button type="submit">Filter</button>
+</form>
+
 <div class="card">
-    <div id="event-rows" hx-get="/events{% if current_level %}?level={{ current_level }}{% endif %}"
+    <div id="event-rows" hx-get="/events{% if query_string %}?{{ query_string }}{% endif %}"
          hx-trigger="every 5s" hx-swap="innerHTML">
         {% include "partials/event_list.html" %}
     </div>

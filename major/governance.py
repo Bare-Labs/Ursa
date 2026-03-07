@@ -12,6 +12,8 @@ from major.db import (
     create_approval_request,
     create_task,
     get_approval_request,
+    list_approval_requests,
+    resolve_approval_request,
 )
 
 RISK_MATRIX: dict[str, str] = {
@@ -255,3 +257,104 @@ def normalize_args_string(args: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON args: {args}") from exc
     return parsed if isinstance(parsed, dict) else {}
+
+
+def process_approval_decision(
+    *,
+    approval_id: str,
+    approved: bool,
+    actor: str,
+    note: str = "",
+) -> dict[str, Any]:
+    """Resolve one approval and emit immutable audit entries."""
+    req = get_approval_request(approval_id)
+    if not req:
+        return {"status": "not_found", "approval_id": approval_id}
+    if req.get("status") != "pending":
+        return {
+            "status": "already_resolved",
+            "approval_id": approval_id,
+            "current_status": req.get("status"),
+        }
+
+    changed = resolve_approval_request(
+        approval_id,
+        approved=approved,
+        decided_by=actor,
+        note=note,
+    )
+    if not changed:
+        return {"status": "error", "approval_id": approval_id}
+
+    if approved:
+        task_args = json.loads(req.get("args") or "{}")
+        queue_decision = queue_task_with_policy(
+            session_id=req["session_id"],
+            task_type=req.get("task_type") or "shell",
+            args=task_args,
+            actor=actor,
+            approval_id=approval_id,
+        )
+        append_immutable_audit_event(
+            actor=actor,
+            action="approval_decision",
+            session_id=req.get("session_id"),
+            approval_id=approval_id,
+            risk_level=req.get("risk_level", "unknown"),
+            policy_result="approved",
+            details={"note": note, "queue_result": queue_decision["status"]},
+        )
+        return {
+            "status": "approved",
+            "approval_id": approval_id,
+            "queue_result": queue_decision["status"],
+            "task_id": queue_decision.get("task_id"),
+        }
+
+    append_immutable_audit_event(
+        actor=actor,
+        action="approval_decision",
+        session_id=req.get("session_id"),
+        approval_id=approval_id,
+        risk_level=req.get("risk_level", "unknown"),
+        policy_result="rejected",
+        details={"note": note},
+    )
+    return {"status": "rejected", "approval_id": approval_id}
+
+
+def process_bulk_approval_decisions(
+    *,
+    approved: bool,
+    actor: str,
+    note: str = "",
+    campaign: str | None = None,
+    tag: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Resolve pending approvals filtered by campaign/tag."""
+    pending = list_approval_requests(
+        status="pending",
+        campaign=campaign,
+        tag=tag,
+        limit=limit,
+    )
+    results = [
+        process_approval_decision(
+            approval_id=row["id"],
+            approved=approved,
+            actor=actor,
+            note=note,
+        )
+        for row in pending
+    ]
+    summary = {
+        "matched": len(pending),
+        "processed": len(results),
+        "approved": sum(1 for r in results if r["status"] == "approved"),
+        "rejected": sum(1 for r in results if r["status"] == "rejected"),
+        "failed": sum(1 for r in results if r["status"] in {"error", "not_found"}),
+        "already_resolved": sum(1 for r in results if r["status"] == "already_resolved"),
+        "results": results,
+    }
+    return summary

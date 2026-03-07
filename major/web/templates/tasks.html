@@ -19,11 +19,20 @@
     </div>
 </div>
 
+<form class="shell-form" method="get" action="/tasks/" style="margin-bottom: 12px;">
+    <input type="text" name="campaign" placeholder="Campaign" value="{{ current_campaign or '' }}">
+    <input type="text" name="tag" placeholder="Tag" value="{{ current_tag or '' }}">
+    {% if current_status %}<input type="hidden" name="status" value="{{ current_status }}">{% endif %}
+    {% if current_session %}<input type="hidden" name="session_id" value="{{ current_session }}">{% endif %}
+    <button type="submit">Filter</button>
+</form>
+
 <table>
     <thead>
         <tr>
             <th>ID</th>
             <th>Session</th>
+            <th>Campaign</th>
             <th>Type</th>
             <th>Args</th>
             <th>Status</th>
@@ -32,7 +41,7 @@
         </tr>
     </thead>
     <tbody id="task-table-body"
-           hx-get="/tasks{% if current_status %}?status={{ current_status }}{% endif %}"
+           hx-get="/tasks{% if query_string %}?{{ query_string }}{% endif %}"
            hx-trigger="every 5s" hx-swap="innerHTML">
         {% include "partials/task_table.html" %}
     </tbody>

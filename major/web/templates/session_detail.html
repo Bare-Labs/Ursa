@@ -24,6 +24,10 @@
         <dd>{{ session.username }}</dd>
         <dt>Remote IP</dt>
         <dd>{{ session.remote_ip }}</dd>
+        <dt>Campaign</dt>
+        <dd>{{ session.campaign or "-" }}</dd>
+        <dt>Tags</dt>
+        <dd>{{ session.tags or "-" }}</dd>
         <dt>OS</dt>
         <dd>{{ session.os }}</dd>
         <dt>Arch</dt>
@@ -38,6 +42,12 @@
         <dd>{{ session.beacon_interval }}s ± {{ (session.jitter * 100) | int }}%</dd>
     </dl>
 </div>
+
+<form class="shell-form" method="post" action="/sessions/{{ session.id }}/context">
+    <input type="text" name="campaign" placeholder="Campaign" value="{{ session.campaign or '' }}">
+    <input type="text" name="tags" placeholder="Tags (comma-separated)" value="{{ session.tags or '' }}">
+    <button type="submit">Save Context</button>
+</form>
 
 {% if session.status != 'dead' %}
 <form class="shell-form"

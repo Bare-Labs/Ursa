@@ -20,19 +20,28 @@
     </div>
 </div>
 
+<form class="shell-form" method="get" action="/sessions/" style="margin-bottom: 12px;">
+    <input type="text" name="campaign" placeholder="Campaign (e.g. Q2-ACME)" value="{{ current_campaign or '' }}">
+    <input type="text" name="tag" placeholder="Tag (e.g. domain-admin)" value="{{ current_tag or '' }}">
+    {% if current_status %}
+    <input type="hidden" name="status" value="{{ current_status }}">
+    {% endif %}
+    <button type="submit">Filter</button>
+</form>
+
 <table>
     <thead>
         <tr>
             <th>ID</th>
             <th>User@Host</th>
-            <th>IP</th>
-            <th>OS</th>
+            <th>Campaign</th>
+            <th>Tags</th>
             <th>Last Seen</th>
             <th>Status</th>
         </tr>
     </thead>
     <tbody id="session-table-body"
-           hx-get="/sessions{% if current_status %}?status={{ current_status }}{% endif %}"
+           hx-get="/sessions{% if current_status or current_campaign or current_tag %}?{% endif %}{% if current_status %}status={{ current_status }}{% endif %}{% if current_status and current_campaign %}&{% endif %}{% if current_campaign %}campaign={{ current_campaign }}{% endif %}{% if (current_status or current_campaign) and current_tag %}&{% endif %}{% if current_tag %}tag={{ current_tag }}{% endif %}"
            hx-trigger="every 5s" hx-swap="innerHTML">
         {% include "partials/session_table.html" %}
     </tbody>

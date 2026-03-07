@@ -1,7 +1,10 @@
 """Task routes — global task list and detail."""
 
-from fastapi import APIRouter, Request, HTTPException
-from major.db import list_tasks, get_task
+from urllib.parse import urlencode
+
+from fastapi import APIRouter, HTTPException, Request
+
+from major.db import get_task, list_tasks
 from major.web.app import templates
 
 router = APIRouter(prefix="/tasks")
@@ -12,8 +15,28 @@ async def task_list(
     request: Request,
     session_id: str | None = None,
     status: str | None = None,
+    campaign: str | None = None,
+    tag: str | None = None,
 ):
-    tasks = list_tasks(session_id=session_id, status=status, limit=100)
+    tasks = list_tasks(
+        session_id=session_id,
+        status=status,
+        campaign=campaign,
+        tag=tag,
+        limit=100,
+    )
+    query = urlencode(
+        {
+            k: v
+            for k, v in {
+                "session_id": session_id,
+                "status": status,
+                "campaign": campaign,
+                "tag": tag,
+            }.items()
+            if v
+        }
+    )
 
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse("partials/task_table.html", {
@@ -26,6 +49,9 @@ async def task_list(
         "tasks": tasks,
         "current_session": session_id,
         "current_status": status,
+        "current_campaign": campaign,
+        "current_tag": tag,
+        "query_string": query,
     })
 
 

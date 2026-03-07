@@ -1,29 +1,39 @@
 """Governance routes — approvals, risk matrix, and immutable audit."""
 
-import json
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import Response
 
-from major.db import (
-    append_immutable_audit_event,
-    get_approval_request,
-    get_immutable_audit,
-    list_approval_requests,
-    resolve_approval_request,
-    verify_immutable_audit_chain,
+from major.db import get_immutable_audit, list_approval_requests, verify_immutable_audit_chain
+from major.governance import (
+    format_risk_matrix,
+    process_approval_decision,
+    process_bulk_approval_decisions,
 )
-from major.governance import format_risk_matrix, queue_task_with_policy
 from major.web.app import templates
 
 router = APIRouter(prefix="/governance")
 
 
 @router.get("/")
-async def governance_home(request: Request, status: str = "pending"):
-    approvals = list_approval_requests(status=status, limit=100)
+async def governance_home(
+    request: Request,
+    status: str = "pending",
+    campaign: str | None = None,
+    tag: str | None = None,
+):
+    approvals = list_approval_requests(
+        status=status,
+        campaign=campaign,
+        tag=tag,
+        limit=100,
+    )
     audit_check = verify_immutable_audit_chain()
     audit_events = get_immutable_audit(limit=50)
+    query = urlencode(
+        {k: v for k, v in {"status": status, "campaign": campaign, "tag": tag}.items() if v}
+    )
 
     return templates.TemplateResponse(
         "governance.html",
@@ -32,6 +42,9 @@ async def governance_home(request: Request, status: str = "pending"):
             "active_page": "governance",
             "approvals": approvals,
             "current_status": status,
+            "current_campaign": campaign,
+            "current_tag": tag,
+            "query_string": query,
             "audit_check": audit_check,
             "audit_events": audit_events,
             "risk_matrix": format_risk_matrix(),
@@ -44,34 +57,18 @@ async def approve_request(
     approval_id: str,
     note: str = Form(default=""),
 ):
-    req = get_approval_request(approval_id)
-    if not req:
+    result = process_approval_decision(
+        approval_id=approval_id,
+        approved=True,
+        actor="web-ui:approve",
+        note=note,
+    )
+    if result["status"] == "not_found":
         raise HTTPException(404, "Approval not found")
-    if req["status"] != "pending":
-        raise HTTPException(409, f"Approval is already {req['status']}")
-
-    if not resolve_approval_request(
-        approval_id, approved=True, decided_by="web-ui:operator", note=note
-    ):
+    if result["status"] == "already_resolved":
+        raise HTTPException(409, "Approval is already resolved")
+    if result["status"] == "error":
         raise HTTPException(500, "Could not update approval")
-
-    task_args = json.loads(req.get("args") or "{}")
-    decision = queue_task_with_policy(
-        session_id=req["session_id"],
-        task_type=req.get("task_type") or "shell",
-        args=task_args,
-        actor="web-ui:approve",
-        approval_id=approval_id,
-    )
-    append_immutable_audit_event(
-        actor="web-ui:approve",
-        action="approval_decision",
-        session_id=req.get("session_id"),
-        approval_id=approval_id,
-        risk_level=req.get("risk_level", "unknown"),
-        policy_result="approved",
-        details={"note": note, "queue_result": decision["status"]},
-    )
 
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = "/governance/"
@@ -83,25 +80,41 @@ async def reject_request(
     approval_id: str,
     note: str = Form(default=""),
 ):
-    req = get_approval_request(approval_id)
-    if not req:
+    result = process_approval_decision(
+        approval_id=approval_id,
+        approved=False,
+        actor="web-ui:reject",
+        note=note,
+    )
+    if result["status"] == "not_found":
         raise HTTPException(404, "Approval not found")
-    if req["status"] != "pending":
-        raise HTTPException(409, f"Approval is already {req['status']}")
-
-    if not resolve_approval_request(
-        approval_id, approved=False, decided_by="web-ui:operator", note=note
-    ):
+    if result["status"] == "already_resolved":
+        raise HTTPException(409, "Approval is already resolved")
+    if result["status"] == "error":
         raise HTTPException(500, "Could not update approval")
 
-    append_immutable_audit_event(
-        actor="web-ui:reject",
-        action="approval_decision",
-        session_id=req.get("session_id"),
-        approval_id=approval_id,
-        risk_level=req.get("risk_level", "unknown"),
-        policy_result="rejected",
-        details={"note": note},
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = "/governance/"
+    return response
+
+
+@router.post("/approvals/bulk")
+async def bulk_approval_decisions(
+    campaign: str = Form(default=""),
+    tag: str = Form(default=""),
+    decision: str = Form(default="approve"),
+    note: str = Form(default=""),
+):
+    campaign_value = campaign.strip() or None
+    tag_value = tag.strip() or None
+    approved = decision.strip().lower() == "approve"
+    _ = process_bulk_approval_decisions(
+        approved=approved,
+        actor="web-ui:bulk-approve" if approved else "web-ui:bulk-reject",
+        note=note,
+        campaign=campaign_value,
+        tag=tag_value,
+        limit=500,
     )
 
     response = Response(status_code=200)

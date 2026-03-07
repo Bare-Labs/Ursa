@@ -2,8 +2,8 @@
 <tr>
     <td class="mono"><a href="/sessions/{{ s.id }}">{{ s.id }}</a></td>
     <td class="mono">{{ s.username }}@{{ s.hostname }}</td>
-    <td class="mono">{{ s.remote_ip }}</td>
-    <td>{{ s.os }}</td>
+    <td class="mono">{{ s.campaign or "-" }}</td>
+    <td class="mono">{{ s.tags or "-" }}</td>
     <td>{{ s.last_seen | time_ago }}</td>
     <td><span class="badge {{ s.status | status_color }}">{{ s.status }}</span></td>
 </tr>

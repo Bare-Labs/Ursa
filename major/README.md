@@ -50,11 +50,16 @@ When accessed via MCP (through the root `server.py`), operators get these tools:
 - `ursa_approvals` — List pending/approved/rejected step-up approvals
 - `ursa_approve` — Approve a pending request and queue its task
 - `ursa_reject` — Reject a pending request
+- `ursa_approve_campaign` — Bulk-approve pending requests for a campaign/tag
+- `ursa_reject_campaign` — Bulk-reject pending requests for a campaign/tag
 - `ursa_audit_integrity` — Verify immutable audit chain integrity
 
 **Session Management:**
 - `ursa_sessions` — List all sessions (active/stale/dead)
 - `ursa_session_info` — Detailed info on a specific session
+- `ursa_set_session_context` — Set campaign and tags for session grouping
+- `ursa_campaigns` — Campaign summary (sessions/tasks/events)
+- `ursa_campaign_report` — Export campaign report as JSON/CSV
 - `ursa_kill_session` — Terminate a session
 
 **Tasking:**

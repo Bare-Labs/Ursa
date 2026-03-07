@@ -3,7 +3,7 @@
     <span class="event-time">{{ e.timestamp | format_ts }}</span>
     <span class="event-level {{ e.level }}">{{ e.level | upper }}</span>
     <span class="event-source">{{ e.source }}</span>
-    <span class="event-message">{{ e.message }}</span>
+    <span class="event-message">{{ e.message }}{% if e.campaign %} [{{ e.campaign }}]{% endif %}</span>
 </div>
 {% endfor %}
 {% if not events %}

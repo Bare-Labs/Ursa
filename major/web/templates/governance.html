@@ -11,6 +11,26 @@
     </div>
 </div>
 
+<form class="shell-form" method="get" action="/governance/" style="margin-bottom: 12px;">
+    <input type="text" name="campaign" placeholder="Campaign" value="{{ current_campaign or '' }}">
+    <input type="text" name="tag" placeholder="Tag" value="{{ current_tag or '' }}">
+    <input type="hidden" name="status" value="{{ current_status }}">
+    <button type="submit">Filter</button>
+</form>
+
+{% if current_status == 'pending' %}
+<div class="card" style="margin-top: 0;">
+    <h2>Bulk Decision</h2>
+    <form class="shell-form" method="post" action="/governance/approvals/bulk" style="margin-bottom: 0;">
+        <input type="hidden" name="campaign" value="{{ current_campaign or '' }}">
+        <input type="hidden" name="tag" value="{{ current_tag or '' }}">
+        <input type="text" name="note" placeholder="Optional audit note for bulk action">
+        <button type="submit" name="decision" value="approve">Approve Filtered</button>
+        <button type="submit" name="decision" value="reject" class="btn btn-danger">Reject Filtered</button>
+    </form>
+</div>
+{% endif %}
+
 <div class="stats-grid">
     <div class="stat-card">
         <div class="stat-value" style="color: {% if audit_check.ok %}var(--green){% else %}var(--red){% endif %}">
@@ -38,6 +58,7 @@
                 <th>Risk</th>
                 <th>Action</th>
                 <th>Session</th>
+                <th>Campaign</th>
                 <th>Requested By</th>
                 <th>Created</th>
                 <th>Reason</th>
@@ -51,6 +72,7 @@
                 <td><span class="badge status-{{ a.risk_level }}">{{ a.risk_level }}</span></td>
                 <td class="mono">{{ a.action }}</td>
                 <td class="mono">{{ a.session_id or "-" }}</td>
+                <td class="mono">{{ a.campaign or "-" }}</td>
                 <td class="mono">{{ a.requested_by }}</td>
                 <td>{{ a.created_at | time_ago }}</td>
                 <td>{{ a.reason }}</td>

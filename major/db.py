@@ -39,6 +39,8 @@ def init_db():
             arch TEXT DEFAULT '',
             pid INTEGER DEFAULT 0,
             process_name TEXT DEFAULT '',
+            campaign TEXT DEFAULT '',
+            tags TEXT DEFAULT '',
             first_seen REAL NOT NULL,
             last_seen REAL NOT NULL,
             beacon_interval INTEGER DEFAULT 5,
@@ -134,6 +136,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_approvals_created_at ON approval_requests(created_at);
         CREATE INDEX IF NOT EXISTS idx_immutable_timestamp ON immutable_audit(timestamp);
     """)
+    _ensure_sessions_columns(db)
     db.commit()
     db.close()
 
@@ -143,18 +146,18 @@ def init_db():
 
 def create_session(remote_ip, hostname="", username="", os_info="",
                    arch="", pid=0, process_name="", encryption_key="",
-                   beacon_interval=5, jitter=0.1):
+                   beacon_interval=5, jitter=0.1, campaign="", tags=""):
     """Register a new implant session."""
     db = get_db()
     session_id = str(uuid.uuid4())[:8]
     now = time.time()
     db.execute("""
         INSERT INTO sessions (id, remote_ip, hostname, username, os, arch,
-                             pid, process_name, first_seen, last_seen,
+                             pid, process_name, campaign, tags, first_seen, last_seen,
                              beacon_interval, jitter, encryption_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (session_id, remote_ip, hostname, username, os_info, arch,
-          pid, process_name, now, now, beacon_interval, jitter, encryption_key))
+          pid, process_name, campaign, tags, now, now, beacon_interval, jitter, encryption_key))
     db.commit()
     db.close()
     log_event("info", "session", f"New session {session_id} from {remote_ip} ({username}@{hostname})",
@@ -183,14 +186,22 @@ def get_session(session_id):
     return dict(row) if row else None
 
 
-def list_sessions(status=None):
-    """List all sessions, optionally filtered by status."""
+def list_sessions(status=None, campaign=None, tag=None):
+    """List all sessions, optionally filtered by status/campaign/tag."""
     db = get_db()
+    query = "SELECT * FROM sessions WHERE 1=1"
+    params = []
     if status:
-        rows = db.execute("SELECT * FROM sessions WHERE status=? ORDER BY last_seen DESC",
-                         (status,)).fetchall()
-    else:
-        rows = db.execute("SELECT * FROM sessions ORDER BY last_seen DESC").fetchall()
+        query += " AND status=?"
+        params.append(status)
+    if campaign:
+        query += " AND campaign=?"
+        params.append(campaign)
+    if tag:
+        query += " AND tags LIKE ?"
+        params.append(f"%{tag}%")
+    query += " ORDER BY last_seen DESC"
+    rows = db.execute(query, params).fetchall()
     db.close()
     return [dict(r) for r in rows]
 
@@ -209,7 +220,7 @@ def update_session_info(session_id, **kwargs):
     """Update session metadata fields."""
     db = get_db()
     allowed = {"hostname", "username", "os", "arch", "pid", "process_name",
-               "beacon_interval", "jitter", "status", "metadata"}
+               "campaign", "tags", "beacon_interval", "jitter", "status", "metadata"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if updates:
         set_clause = ", ".join(f"{k}=?" for k in updates)
@@ -278,17 +289,28 @@ def get_task(task_id):
     return dict(row) if row else None
 
 
-def list_tasks(session_id=None, status=None, limit=50):
-    """List tasks, optionally filtered by session and/or status."""
+def list_tasks(session_id=None, status=None, campaign=None, tag=None, limit=50):
+    """List tasks, optionally filtered by session/status/campaign/tag."""
     db = get_db()
-    query = "SELECT * FROM tasks WHERE 1=1"
+    query = """
+        SELECT t.*, s.campaign AS campaign, s.tags AS session_tags
+        FROM tasks t
+        LEFT JOIN sessions s ON s.id = t.session_id
+        WHERE 1=1
+    """
     params = []
     if session_id:
-        query += " AND session_id=?"
+        query += " AND t.session_id=?"
         params.append(session_id)
     if status:
-        query += " AND status=?"
+        query += " AND t.status=?"
         params.append(status)
+    if campaign:
+        query += " AND s.campaign=?"
+        params.append(campaign)
+    if tag:
+        query += " AND s.tags LIKE ?"
+        params.append(f"%{tag}%")
     query += " ORDER BY created_at DESC LIMIT ?"
     params.append(limit)
     rows = db.execute(query, params).fetchall()
@@ -394,18 +416,29 @@ def log_event(level, source, message, session_id=None, details=None):
     db.close()
 
 
-def get_events(limit=100, level=None, session_id=None):
-    """Retrieve recent events."""
+def get_events(limit=100, level=None, session_id=None, campaign=None, tag=None):
+    """Retrieve recent events, optionally filtered by campaign/tag."""
     db = get_db()
-    query = "SELECT * FROM event_log WHERE 1=1"
+    query = """
+        SELECT e.*, s.campaign AS campaign, s.tags AS session_tags
+        FROM event_log e
+        LEFT JOIN sessions s ON s.id = e.session_id
+        WHERE 1=1
+    """
     params = []
     if level:
-        query += " AND level=?"
+        query += " AND e.level=?"
         params.append(level)
     if session_id:
-        query += " AND session_id=?"
+        query += " AND e.session_id=?"
         params.append(session_id)
-    query += " ORDER BY timestamp DESC LIMIT ?"
+    if campaign:
+        query += " AND s.campaign=?"
+        params.append(campaign)
+    if tag:
+        query += " AND s.tags LIKE ?"
+        params.append(f"%{tag}%")
+    query += " ORDER BY e.timestamp DESC LIMIT ?"
     params.append(limit)
     rows = db.execute(query, params).fetchall()
     db.close()
@@ -464,22 +497,28 @@ def get_approval_request(approval_id):
     return dict(row) if row else None
 
 
-def list_approval_requests(status=None, limit=50):
-    """List approval requests, optionally filtered by status."""
+def list_approval_requests(status=None, campaign=None, tag=None, limit=50):
+    """List approval requests, optionally filtered by status/campaign/tag."""
     db = get_db()
+    query = """
+        SELECT a.*, s.campaign AS campaign, s.tags AS session_tags
+        FROM approval_requests a
+        LEFT JOIN sessions s ON s.id = a.session_id
+        WHERE 1=1
+    """
+    params = []
     if status:
-        rows = db.execute("""
-            SELECT * FROM approval_requests
-            WHERE status=?
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (status, limit)).fetchall()
-    else:
-        rows = db.execute("""
-            SELECT * FROM approval_requests
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,)).fetchall()
+        query += " AND a.status=?"
+        params.append(status)
+    if campaign:
+        query += " AND s.campaign=?"
+        params.append(campaign)
+    if tag:
+        query += " AND s.tags LIKE ?"
+        params.append(f"%{tag}%")
+    query += " ORDER BY a.created_at DESC LIMIT ?"
+    params.append(limit)
+    rows = db.execute(query, params).fetchall()
     db.close()
     return [dict(r) for r in rows]
 
@@ -513,6 +552,15 @@ def resolve_approval_request(approval_id, approved, decided_by="operator", note=
 def _compute_event_hash(prev_hash, payload):
     raw = f"{prev_hash}|{json.dumps(payload, sort_keys=True, separators=(',', ':'))}"
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _ensure_sessions_columns(db):
+    """Best-effort migration for sessions table additive columns."""
+    columns = {r[1] for r in db.execute("PRAGMA table_info(sessions)").fetchall()}
+    if "campaign" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN campaign TEXT DEFAULT ''")
+    if "tags" not in columns:
+        db.execute("ALTER TABLE sessions ADD COLUMN tags TEXT DEFAULT ''")
 
 
 def append_immutable_audit_event(

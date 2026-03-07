@@ -3,7 +3,6 @@
 import json
 import time
 
-import pytest
 from major import db
 
 
@@ -59,15 +58,37 @@ class TestSessions:
         assert len(db.list_sessions(status="dead")) == 1
         assert len(db.list_sessions(status="active")) == 0
 
+    def test_list_sessions_by_campaign(self, tmp_db):
+        s1 = db.create_session("10.0.0.1", campaign="ALPHA")
+        _ = db.create_session("10.0.0.2", campaign="BETA")
+        rows = db.list_sessions(campaign="ALPHA")
+        assert len(rows) == 1
+        assert rows[0]["id"] == s1
+
+    def test_list_sessions_by_tag(self, tmp_db):
+        s1 = db.create_session("10.0.0.1", tags="finance,dc1")
+        _ = db.create_session("10.0.0.2", tags="eng,linux")
+        rows = db.list_sessions(tag="finance")
+        assert len(rows) == 1
+        assert rows[0]["id"] == s1
+
     def test_kill_session(self, tmp_db, sample_session):
         db.kill_session(sample_session)
         assert db.get_session(sample_session)["status"] == "dead"
 
     def test_update_session_info(self, tmp_db, sample_session):
-        db.update_session_info(sample_session, hostname="NEWBOX", status="stale")
+        db.update_session_info(
+            sample_session,
+            hostname="NEWBOX",
+            status="stale",
+            campaign="OP-SNOW",
+            tags="corp,dc",
+        )
         s = db.get_session(sample_session)
         assert s["hostname"] == "NEWBOX"
         assert s["status"] == "stale"
+        assert s["campaign"] == "OP-SNOW"
+        assert s["tags"] == "corp,dc"
 
     def test_update_session_info_filters_disallowed_fields(self, tmp_db, sample_session):
         db.update_session_info(sample_session, id="HIJACKED", remote_ip="evil")
@@ -122,6 +143,24 @@ class TestTasks:
         db.create_task(sid2, "whoami")
         assert len(db.list_tasks(session_id=sample_session)) == 1
         assert len(db.list_tasks()) == 2
+
+    def test_list_tasks_by_campaign(self, tmp_db):
+        sid1 = db.create_session("10.0.0.1", campaign="ALPHA")
+        sid2 = db.create_session("10.0.0.2", campaign="BETA")
+        db.create_task(sid1, "shell")
+        db.create_task(sid2, "whoami")
+        rows = db.list_tasks(campaign="ALPHA", limit=20)
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == sid1
+
+    def test_list_tasks_by_tag(self, tmp_db):
+        sid1 = db.create_session("10.0.0.1", tags="finance,dc1")
+        sid2 = db.create_session("10.0.0.2", tags="eng,linux")
+        db.create_task(sid1, "shell")
+        db.create_task(sid2, "whoami")
+        rows = db.list_tasks(tag="finance", limit=20)
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == sid1
 
 
 class TestFiles:
@@ -191,3 +230,44 @@ class TestEvents:
         events = db.get_events(session_id=sample_session)
         assert len(events) >= 1
         assert all(e["session_id"] == sample_session for e in events)
+
+    def test_filter_events_by_campaign(self, tmp_db):
+        sid1 = db.create_session("10.0.0.1", campaign="ALPHA")
+        sid2 = db.create_session("10.0.0.2", campaign="BETA")
+        db.log_event("info", "test", "alpha event", session_id=sid1)
+        db.log_event("info", "test", "beta event", session_id=sid2)
+        events = db.get_events(campaign="ALPHA", limit=20)
+        assert any(e["session_id"] == sid1 and e["message"] == "alpha event" for e in events)
+        assert all(e.get("campaign") == "ALPHA" for e in events)
+
+    def test_filter_events_by_tag(self, tmp_db):
+        sid1 = db.create_session("10.0.0.1", tags="prod,dc1")
+        sid2 = db.create_session("10.0.0.2", tags="lab,dev")
+        db.log_event("info", "test", "prod event", session_id=sid1)
+        db.log_event("info", "test", "lab event", session_id=sid2)
+        events = db.get_events(tag="prod", limit=20)
+        assert any(e["session_id"] == sid1 and e["message"] == "prod event" for e in events)
+        assert all("prod" in (e.get("session_tags") or "") for e in events)
+
+
+class TestApprovals:
+
+    def test_list_approvals_by_campaign(self, tmp_db):
+        sid1 = db.create_session("10.0.0.1", campaign="ALPHA")
+        sid2 = db.create_session("10.0.0.2", campaign="BETA")
+        db.create_approval_request("queue_task", "high", session_id=sid1, task_type="download")
+        db.create_approval_request("queue_task", "high", session_id=sid2, task_type="download")
+        rows = db.list_approval_requests(status="pending", campaign="ALPHA", limit=20)
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == sid1
+        assert rows[0]["campaign"] == "ALPHA"
+
+    def test_list_approvals_by_tag(self, tmp_db):
+        sid1 = db.create_session("10.0.0.1", tags="prod,dc1")
+        sid2 = db.create_session("10.0.0.2", tags="lab,dev")
+        db.create_approval_request("queue_task", "high", session_id=sid1, task_type="download")
+        db.create_approval_request("queue_task", "high", session_id=sid2, task_type="download")
+        rows = db.list_approval_requests(status="pending", tag="prod", limit=20)
+        assert len(rows) == 1
+        assert rows[0]["session_id"] == sid1
+        assert "prod" in (rows[0]["session_tags"] or "")

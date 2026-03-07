@@ -11,6 +11,7 @@ from major.db import (
     list_files,
     list_sessions,
     list_tasks,
+    update_session_info,
 )
 from major.governance import queue_task_with_policy
 from major.web.app import templates
@@ -19,8 +20,13 @@ router = APIRouter(prefix="/sessions")
 
 
 @router.get("/")
-async def session_list(request: Request, status: str | None = None):
-    sessions = list_sessions(status=status)
+async def session_list(
+    request: Request,
+    status: str | None = None,
+    campaign: str | None = None,
+    tag: str | None = None,
+):
+    sessions = list_sessions(status=status, campaign=campaign, tag=tag)
 
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse("partials/session_table.html", {
@@ -32,6 +38,8 @@ async def session_list(request: Request, status: str | None = None):
         "active_page": "sessions",
         "sessions": sessions,
         "current_status": status,
+        "current_campaign": campaign,
+        "current_tag": tag,
     })
 
 
@@ -54,8 +62,8 @@ async def session_detail(request: Request, session_id: str):
 @router.post("/{session_id}/task")
 async def create_session_task(request: Request, session_id: str):
     form = await request.form()
-    command = form.get("command", "").strip()
-    task_type = form.get("task_type", "shell")
+    command = str(form.get("command", "")).strip()
+    task_type = str(form.get("task_type", "shell"))
 
     args = {"command": command} if task_type == "shell" and command else {}
     decision = queue_task_with_policy(
@@ -90,4 +98,16 @@ async def kill_session_route(request: Request, session_id: str):
 
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = "/sessions"
+    return response
+
+
+@router.post("/{session_id}/context")
+async def update_session_context(request: Request, session_id: str):
+    form = await request.form()
+    campaign = str(form.get("campaign", "")).strip()
+    tags = str(form.get("tags", "")).strip()
+    update_session_info(session_id, campaign=campaign, tags=tags)
+
+    response = Response(status_code=200)
+    response.headers["HX-Redirect"] = f"/sessions/{session_id}"
     return response

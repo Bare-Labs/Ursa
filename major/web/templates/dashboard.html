@@ -30,6 +30,32 @@
     </div>
 </div>
 
+{% if top_campaigns %}
+<div class="card">
+    <h2>Campaign Activity</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Campaign</th>
+                <th>Sessions</th>
+                <th>Tasks</th>
+                <th>Events</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for name, counts in top_campaigns %}
+            <tr>
+                <td class="mono"><a href="/sessions/?campaign={{ name }}">{{ name }}</a></td>
+                <td>{{ counts.sessions }}</td>
+                <td><a href="/tasks/?campaign={{ name }}">{{ counts.tasks }}</a></td>
+                <td><a href="/events/?campaign={{ name }}">{{ counts.events }}</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
     <div class="card">
         <h2>Active Sessions</h2>
