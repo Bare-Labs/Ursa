@@ -140,6 +140,24 @@ python3 major/server.py --port 9000        # Custom port
 python3 major/server.py --host 127.0.0.1   # Localhost only
 ```
 
+## Web Auth & RBAC
+
+The web UI now requires login with role-based access control:
+
+- `operator` — Operational actions (tasking, campaign/checklist updates)
+- `reviewer` — Approval and remediation actions
+- `admin` — Policy/playbook/user administration
+
+Approval decisions are now signed with an HMAC signature and recorded in immutable audit details.
+
+A bootstrap admin user is created automatically on first DB init from config:
+
+- `major.web.auth.bootstrap_username` (default: `admin`)
+- `major.web.auth.bootstrap_password` (default: `change-me-now`)
+- `major.web.auth.bootstrap_role` (default: `admin`)
+
+Change these values before deploying outside local/dev environments.
+
 ## File Structure
 
 ```

@@ -28,6 +28,7 @@
 </form>
 
 {% if current_status == 'pending' %}
+{% if request.state.user and (request.state.user.role == 'reviewer' or request.state.user.role == 'admin') %}
 <div class="card" style="margin-top: 0;">
     <h2>Bulk Decision</h2>
     <form class="shell-form" method="post" action="/governance/approvals/bulk" style="margin-bottom: 0;">
@@ -40,10 +41,12 @@
     </form>
 </div>
 {% endif %}
+{% endif %}
 
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
     <div class="card">
         <h2>Campaign Policies</h2>
+        {% if request.state.user and request.state.user.role == 'admin' %}
         <form class="shell-form" method="post" action="/governance/policy" style="margin-bottom: 12px;">
             <input type="text" name="campaign" placeholder="Campaign" value="{{ current_campaign or '' }}" required>
             <input type="text" name="max_pending_total" placeholder="max total" value="20">
@@ -52,6 +55,7 @@
             <input type="text" name="max_oldest_pending_minutes" placeholder="max oldest min" value="60">
             <button type="submit">Save Policy</button>
         </form>
+        {% endif %}
         {% if policies %}
         <table>
             <thead>
@@ -73,10 +77,12 @@
                     <td>{{ p.max_pending_critical }}</td>
                     <td>{{ p.max_oldest_pending_minutes }}</td>
                     <td>
+                        {% if request.state.user and request.state.user.role == 'admin' %}
                         <form method="post" action="/governance/policy/delete" onsubmit="return confirm('Delete policy for {{ p.campaign }}?')">
                             <input type="hidden" name="campaign" value="{{ p.campaign }}">
                             <button type="submit" class="btn btn-danger">Delete</button>
                         </form>
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
@@ -88,6 +94,7 @@
     </div>
     <div class="card">
         <h2>Remediation Apply</h2>
+        {% if request.state.user and (request.state.user.role == 'reviewer' or request.state.user.role == 'admin') %}
         <form class="shell-form" method="post" action="/governance/remediation/apply" style="margin-bottom: 12px;">
             <input type="text" name="campaign" placeholder="Campaign" value="{{ current_campaign or '' }}" required>
             <select name="strategy" id="remediation-strategy">
@@ -113,6 +120,7 @@
             <input type="text" name="due_in_hours" placeholder="Due in hours" value="24">
             <button type="submit">Create Checklist From Alerts</button>
         </form>
+        {% endif %}
         <script>
             (function () {
                 const source = document.getElementById("remediation-strategy");
@@ -182,6 +190,7 @@
                 <td>{{ a.reason }}</td>
                 {% if current_status == 'pending' %}
                 <td>
+                    {% if request.state.user and (request.state.user.role == 'reviewer' or request.state.user.role == 'admin') %}
                     <div style="display:flex; gap:6px;">
                         <form method="post" action="/governance/approvals/{{ a.id }}/approve">
                             <button class="btn" type="submit">Approve</button>
@@ -190,6 +199,9 @@
                             <button class="btn btn-danger" type="submit">Reject</button>
                         </form>
                     </div>
+                    {% else %}
+                    <span class="mono">reviewer+</span>
+                    {% endif %}
                 </td>
                 {% endif %}
             </tr>

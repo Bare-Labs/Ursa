@@ -15,6 +15,7 @@ from major.db import (
 )
 from major.governance import queue_task_with_policy
 from major.web.app import templates
+from major.web.auth import actor_for, require_role
 
 router = APIRouter(prefix="/sessions")
 
@@ -61,6 +62,7 @@ async def session_detail(request: Request, session_id: str):
 
 @router.post("/{session_id}/task")
 async def create_session_task(request: Request, session_id: str):
+    _ = require_role(request, "operator")
     form = await request.form()
     command = str(form.get("command", "")).strip()
     task_type = str(form.get("task_type", "shell"))
@@ -70,7 +72,7 @@ async def create_session_task(request: Request, session_id: str):
         session_id=session_id,
         task_type=task_type,
         args=args,
-        actor="web-ui:sessions/task",
+        actor=actor_for(request, "sessions/task"),
     )
     if decision["status"] != "queued":
         approval_id = decision.get("approval_id", "-")
@@ -85,11 +87,12 @@ async def create_session_task(request: Request, session_id: str):
 
 @router.post("/{session_id}/kill")
 async def kill_session_route(request: Request, session_id: str):
+    _ = require_role(request, "operator")
     decision = queue_task_with_policy(
         session_id=session_id,
         task_type="kill",
         args={},
-        actor="web-ui:sessions/kill",
+        actor=actor_for(request, "sessions/kill"),
     )
     if decision["status"] != "queued":
         approval_id = decision.get("approval_id", "-")
@@ -103,6 +106,7 @@ async def kill_session_route(request: Request, session_id: str):
 
 @router.post("/{session_id}/context")
 async def update_session_context(request: Request, session_id: str):
+    _ = require_role(request, "operator")
     form = await request.form()
     campaign = str(form.get("campaign", "")).strip()
     tags = str(form.get("tags", "")).strip()

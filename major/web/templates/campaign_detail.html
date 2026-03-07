@@ -10,7 +10,9 @@
     <div class="filter-group">
         <a class="filter-btn" href="/campaigns/{{ campaign_name }}/handoff?format=md">Handoff MD</a>
         <a class="filter-btn" href="/campaigns/{{ campaign_name }}/handoff?format=json">Handoff JSON</a>
+        {% if request.state.user and request.state.user.role == "admin" %}
         <a class="filter-btn" href="/campaigns/playbooks">Playbooks</a>
+        {% endif %}
     </div>
 </div>
 

@@ -27,6 +27,7 @@ from major.governance import (
     process_bulk_approval_decisions,
 )
 from major.web.app import templates
+from major.web.auth import actor_for, require_role
 
 router = APIRouter(prefix="/governance")
 
@@ -85,13 +86,15 @@ async def governance_home(
 
 @router.post("/approvals/{approval_id}/approve")
 async def approve_request(
+    request: Request,
     approval_id: str,
     note: str = Form(default=""),
 ):
+    _ = require_role(request, "reviewer")
     result = process_approval_decision(
         approval_id=approval_id,
         approved=True,
-        actor="web-ui:approve",
+        actor=actor_for(request, "governance/approve"),
         note=note,
     )
     if result["status"] == "not_found":
@@ -108,13 +111,15 @@ async def approve_request(
 
 @router.post("/approvals/{approval_id}/reject")
 async def reject_request(
+    request: Request,
     approval_id: str,
     note: str = Form(default=""),
 ):
+    _ = require_role(request, "reviewer")
     result = process_approval_decision(
         approval_id=approval_id,
         approved=False,
-        actor="web-ui:reject",
+        actor=actor_for(request, "governance/reject"),
         note=note,
     )
     if result["status"] == "not_found":
@@ -131,18 +136,20 @@ async def reject_request(
 
 @router.post("/approvals/bulk")
 async def bulk_approval_decisions(
+    request: Request,
     campaign: str = Form(default=""),
     tag: str = Form(default=""),
     risk_level: str = Form(default=""),
     decision: str = Form(default="approve"),
     note: str = Form(default=""),
 ):
+    _ = require_role(request, "reviewer")
     campaign_value = campaign.strip() or None
     tag_value = tag.strip() or None
     approved = decision.strip().lower() == "approve"
     _ = process_bulk_approval_decisions(
         approved=approved,
-        actor="web-ui:bulk-approve" if approved else "web-ui:bulk-reject",
+        actor=actor_for(request, "governance/bulk-approve" if approved else "governance/bulk-reject"),
         note=note,
         campaign=campaign_value,
         tag=tag_value,
@@ -157,6 +164,7 @@ async def bulk_approval_decisions(
 
 @router.post("/policy")
 async def upsert_policy(
+    request: Request,
     campaign: str = Form(...),
     max_pending_total: int = Form(default=20),
     max_pending_high: int = Form(default=10),
@@ -164,6 +172,7 @@ async def upsert_policy(
     max_oldest_pending_minutes: int = Form(default=60),
     note: str = Form(default=""),
 ):
+    _ = require_role(request, "admin")
     name = campaign.strip()
     if not name:
         raise HTTPException(400, "Campaign is required")
@@ -173,7 +182,7 @@ async def upsert_policy(
         max_pending_high=max_pending_high,
         max_pending_critical=max_pending_critical,
         max_oldest_pending_minutes=max_oldest_pending_minutes,
-        updated_by="web-ui:policy",
+        updated_by=actor_for(request, "governance/policy"),
         note=note,
     )
     response = Response(status_code=200)
@@ -182,7 +191,8 @@ async def upsert_policy(
 
 
 @router.post("/policy/delete")
-async def delete_policy(campaign: str = Form(...)):
+async def delete_policy(request: Request, campaign: str = Form(...)):
+    _ = require_role(request, "admin")
     name = campaign.strip()
     if not name:
         raise HTTPException(400, "Campaign is required")
@@ -194,10 +204,12 @@ async def delete_policy(campaign: str = Form(...)):
 
 @router.post("/remediation/apply")
 async def apply_remediation(
+    request: Request,
     campaign: str = Form(...),
     strategy: str = Form(default="reduce-critical"),
     note: str = Form(default=""),
 ):
+    _ = require_role(request, "reviewer")
     name = campaign.strip()
     if not name:
         raise HTTPException(400, "Campaign is required")
@@ -214,7 +226,7 @@ async def apply_remediation(
 
     process_bulk_approval_decisions(
         approved=False,
-        actor="web-ui:remediation",
+        actor=actor_for(request, "governance/remediation"),
         note=note or f"Web remediation strategy={strategy_key}",
         campaign=name,
         risk_level=risk_level,
@@ -227,10 +239,12 @@ async def apply_remediation(
 
 @router.post("/remediation/checklist")
 async def create_remediation_checklist(
+    request: Request,
     campaign: str = Form(...),
     owner: str = Form(default=""),
     due_in_hours: int = Form(default=24),
 ):
+    user = require_role(request, "reviewer")
     name = campaign.strip()
     if not name:
         raise HTTPException(400, "Campaign is required")
@@ -259,8 +273,9 @@ async def create_remediation_checklist(
             campaign=name,
             title=title,
             details=details,
-            owner=owner.strip(),
+            owner=owner.strip() or user.get("username", ""),
             due_at=due_at,
+            actor=actor_for(request, "governance/remediation-checklist"),
         )
         existing_titles.add(title.lower())
     response = Response(status_code=200)

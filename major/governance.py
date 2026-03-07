@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +33,8 @@ RISK_MATRIX: dict[str, str] = {
     "sleep": "medium",
     "shell": "high",
     "kill": "critical",
+    "arp_spoof": "critical",
+    "arp_spoof_stop": "low",
 }
 
 SHELL_HIGH_RISK_TOKENS = {
@@ -260,6 +265,18 @@ def normalize_args_string(args: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _sign_approval_decision(approval_id: str, actor: str, approved: bool, note: str, signed_at: float) -> str:
+    """Create an HMAC signature for approval decisions."""
+    secret = str(
+        get_config().get(
+            "major.governance.approval_signing_key",
+            "ursa-dev-approval-signing-key",
+        )
+    ).encode("utf-8")
+    payload = f"{approval_id}|{actor}|{1 if approved else 0}|{note}|{int(signed_at)}".encode()
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()
+
+
 def process_approval_decision(
     *,
     approval_id: str,
@@ -287,6 +304,9 @@ def process_approval_decision(
     if not changed:
         return {"status": "error", "approval_id": approval_id}
 
+    signed_at = time.time()
+    approval_signature = _sign_approval_decision(approval_id, actor, approved, note, signed_at)
+
     if approved:
         task_args = json.loads(req.get("args") or "{}")
         queue_decision = queue_task_with_policy(
@@ -303,13 +323,20 @@ def process_approval_decision(
             approval_id=approval_id,
             risk_level=req.get("risk_level", "unknown"),
             policy_result="approved",
-            details={"note": note, "queue_result": queue_decision["status"]},
+            details={
+                "note": note,
+                "queue_result": queue_decision["status"],
+                "approval_signature": approval_signature,
+                "signed_at": signed_at,
+            },
         )
         return {
             "status": "approved",
             "approval_id": approval_id,
             "queue_result": queue_decision["status"],
             "task_id": queue_decision.get("task_id"),
+            "approval_signature": approval_signature,
+            "signed_at": signed_at,
         }
 
     append_immutable_audit_event(
@@ -319,9 +346,18 @@ def process_approval_decision(
         approval_id=approval_id,
         risk_level=req.get("risk_level", "unknown"),
         policy_result="rejected",
-        details={"note": note},
+        details={
+            "note": note,
+            "approval_signature": approval_signature,
+            "signed_at": signed_at,
+        },
     )
-    return {"status": "rejected", "approval_id": approval_id}
+    return {
+        "status": "rejected",
+        "approval_id": approval_id,
+        "approval_signature": approval_signature,
+        "signed_at": signed_at,
+    }
 
 
 def process_bulk_approval_decisions(

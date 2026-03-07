@@ -42,6 +42,12 @@ DEFAULTS = {
         "web": {
             "host": "0.0.0.0",
             "port": 8080,
+            "auth": {
+                "session_secret": "ursa-dev-session-secret-change-me",
+                "bootstrap_username": "admin",
+                "bootstrap_password": "change-me-now",
+                "bootstrap_role": "admin",
+            },
         },
         "implant_defaults": {
             "beacon_interval": 5,
@@ -55,6 +61,8 @@ DEFAULTS = {
             "require_step_up_approval": False,
             # Risk tiers that require approval when step-up is enabled.
             "step_up_risks": ["high", "critical"],
+            # HMAC key for signing approval decisions in immutable audit details.
+            "approval_signing_key": "ursa-dev-approval-signing-key",
         },
     },
     "minor": {

@@ -7,6 +7,7 @@ SQLite-backed storage for sessions, tasks, and results.
 
 import hashlib
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -179,6 +180,17 @@ def init_db():
             items_json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'operator',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            last_login_at REAL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -198,10 +210,13 @@ def init_db():
             ON campaign_checklist_history(created_at);
         CREATE INDEX IF NOT EXISTS idx_campaign_playbooks_updated_at
             ON campaign_playbooks(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
     """)
     _ensure_sessions_columns(db)
     _ensure_campaign_policy_columns(db)
     _ensure_default_campaign_playbooks(db)
+    _ensure_users_columns(db)
+    _ensure_default_admin_user(db)
     db.commit()
     db.close()
 
@@ -640,6 +655,17 @@ def _ensure_campaign_policy_columns(db):
         )
 
 
+def _ensure_users_columns(db):
+    """Best-effort migration for users table additive columns."""
+    columns = {r[1] for r in db.execute("PRAGMA table_info(users)").fetchall()}
+    if "role" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'")
+    if "is_active" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+    if "last_login_at" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN last_login_at REAL")
+
+
 def _ensure_default_campaign_playbooks(db):
     """Seed baseline playbooks when none are configured."""
     existing = db.execute("SELECT COUNT(*) AS n FROM campaign_playbooks").fetchone()
@@ -683,6 +709,25 @@ def _ensure_default_campaign_playbooks(db):
             """,
             (name, now, now, description, json.dumps(items)),
         )
+
+
+def _ensure_default_admin_user(db):
+    """Create one bootstrap admin user if no users exist."""
+    existing = db.execute("SELECT COUNT(*) AS n FROM users").fetchone()
+    if existing and int(existing["n"]) > 0:
+        return
+    cfg = get_config()
+    username = str(cfg.get("major.web.auth.bootstrap_username", "admin")).strip() or "admin"
+    password = str(cfg.get("major.web.auth.bootstrap_password", "change-me-now"))
+    role = str(cfg.get("major.web.auth.bootstrap_role", "admin")).strip().lower() or "admin"
+    now = time.time()
+    db.execute(
+        """
+        INSERT INTO users (username, password_hash, role, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?)
+        """,
+        (username, hash_password(password), role, now, now),
+    )
 
 
 def append_immutable_audit_event(
@@ -1045,6 +1090,7 @@ def add_campaign_checklist_item(
     details="",
     owner="",
     due_at=None,
+    actor="system",
 ):
     """Create checklist item for a campaign."""
     db = get_db()
@@ -1061,6 +1107,7 @@ def add_campaign_checklist_item(
         db,
         item_id=item_id,
         campaign=campaign,
+        actor=actor,
         action="created",
         title=title,
         new_status="pending",
@@ -1106,7 +1153,7 @@ def list_campaign_checklist(campaign=None, status=None, owner=None, text=None, s
     return [dict(r) for r in rows]
 
 
-def update_campaign_checklist_item(item_id, **kwargs):
+def update_campaign_checklist_item(item_id, actor="system", **kwargs):
     """Update checklist item fields."""
     allowed = {"title", "details", "status", "owner", "due_at"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
@@ -1134,6 +1181,7 @@ def update_campaign_checklist_item(item_id, **kwargs):
             db,
             item_id=item_id,
             campaign=before["campaign"],
+            actor=actor,
             action=action,
             title=str(after.get("title") or ""),
             prev_status=str(before.get("status") or ""),
@@ -1145,7 +1193,7 @@ def update_campaign_checklist_item(item_id, **kwargs):
     return changed > 0
 
 
-def delete_campaign_checklist_item(item_id):
+def delete_campaign_checklist_item(item_id, actor="system"):
     """Delete checklist item."""
     db = get_db()
     row = db.execute("SELECT * FROM campaign_checklist WHERE id=?", (item_id,)).fetchone()
@@ -1157,6 +1205,7 @@ def delete_campaign_checklist_item(item_id):
         db,
         item_id=item_id,
         campaign=item["campaign"],
+        actor=actor,
         action="deleted",
         title=str(item.get("title") or ""),
         prev_status=str(item.get("status") or ""),
@@ -1397,6 +1446,178 @@ def _record_campaign_checklist_history(
             json.dumps(details or {}),
         ),
     )
+
+
+PASSWORD_ALGO = "pbkdf2_sha256"
+PASSWORD_ITERATIONS = 210_000
+VALID_ROLES = {"operator", "reviewer", "admin"}
+
+
+def hash_password(password, *, salt_hex=None, iterations=PASSWORD_ITERATIONS):
+    """Hash a password for storage."""
+    if not isinstance(password, str) or not password:
+        raise ValueError("Password is required")
+    salt = bytes.fromhex(salt_hex) if salt_hex else os.urandom(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        int(iterations),
+    ).hex()
+    return f"{PASSWORD_ALGO}${int(iterations)}${salt.hex()}${digest}"
+
+
+def verify_password(password, password_hash):
+    """Verify plaintext password against stored hash."""
+    try:
+        algo, iterations, salt_hex, digest = str(password_hash).split("$", 3)
+    except ValueError:
+        return False
+    if algo != PASSWORD_ALGO:
+        return False
+    check = hash_password(password, salt_hex=salt_hex, iterations=int(iterations))
+    return check == password_hash
+
+
+def get_user_by_username(username, include_password=False):
+    """Fetch a user by username."""
+    db = get_db()
+    row = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    db.close()
+    if not row:
+        return None
+    user = dict(row)
+    user["is_active"] = bool(user.get("is_active"))
+    if not include_password:
+        user.pop("password_hash", None)
+    return user
+
+
+def get_user_by_id(user_id, include_password=False):
+    """Fetch a user by id."""
+    db = get_db()
+    row = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    db.close()
+    if not row:
+        return None
+    user = dict(row)
+    user["is_active"] = bool(user.get("is_active"))
+    if not include_password:
+        user.pop("password_hash", None)
+    return user
+
+
+def list_users(limit=200):
+    """List users for administration."""
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT id, username, role, is_active, created_at, updated_at, last_login_at
+        FROM users
+        ORDER BY username ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    db.close()
+    users = [dict(r) for r in rows]
+    for user in users:
+        user["is_active"] = bool(user.get("is_active"))
+    return users
+
+
+def create_user(username, password, role="operator", is_active=True):
+    """Create a user account."""
+    name = (username or "").strip()
+    chosen_role = (role or "operator").strip().lower()
+    if not name:
+        raise ValueError("Username is required")
+    if chosen_role not in VALID_ROLES:
+        raise ValueError("Invalid role")
+    now = time.time()
+    db = get_db()
+    try:
+        db.execute(
+            """
+            INSERT INTO users (username, password_hash, role, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name,
+                hash_password(password),
+                chosen_role,
+                1 if is_active else 0,
+                now,
+                now,
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        db.close()
+        raise ValueError("Username already exists") from exc
+    db.commit()
+    db.close()
+    return get_user_by_username(name)
+
+
+def set_user_password(user_id, password):
+    """Set a new password for a user."""
+    db = get_db()
+    db.execute(
+        "UPDATE users SET password_hash=?, updated_at=? WHERE id=?",
+        (hash_password(password), time.time(), user_id),
+    )
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
+
+
+def update_user_role_status(user_id, role=None, is_active=None):
+    """Update user role and/or active status."""
+    updates = {}
+    if role is not None:
+        chosen_role = str(role).strip().lower()
+        if chosen_role not in VALID_ROLES:
+            raise ValueError("Invalid role")
+        updates["role"] = chosen_role
+    if is_active is not None:
+        updates["is_active"] = 1 if bool(is_active) else 0
+    if not updates:
+        return False
+    updates["updated_at"] = time.time()
+    db = get_db()
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    params = list(updates.values()) + [user_id]
+    db.execute(f"UPDATE users SET {set_clause} WHERE id=?", params)
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
+
+
+def touch_user_login(user_id):
+    """Update last login timestamp."""
+    db = get_db()
+    db.execute(
+        "UPDATE users SET last_login_at=?, updated_at=? WHERE id=?",
+        (time.time(), time.time(), user_id),
+    )
+    changed = db.total_changes
+    db.commit()
+    db.close()
+    return changed > 0
+
+
+def authenticate_user(username, password):
+    """Authenticate username/password and return user if valid."""
+    user = get_user_by_username((username or "").strip(), include_password=True)
+    if not user or not user.get("is_active"):
+        return None
+    stored_hash = user.get("password_hash") or ""
+    if not verify_password(password, stored_hash):
+        return None
+    user.pop("password_hash", None)
+    return user
 
 
 # Initialize DB on import

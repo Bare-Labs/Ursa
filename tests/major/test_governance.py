@@ -10,6 +10,7 @@ from major.db import (
 )
 from major.governance import (
     build_policy_remediation_recommendations,
+    classify_task_risk,
     get_policy_remediation_plan,
     process_approval_decision,
     process_bulk_approval_decisions,
@@ -170,6 +171,8 @@ def test_process_approval_decision_approve_queues_task(tmp_db, sample_session, m
     assert result["status"] == "approved"
     assert result["queue_result"] == "queued"
     assert result["task_id"]
+    assert result["approval_signature"]
+    assert result["signed_at"]
 
 
 def test_process_bulk_approvals_campaign_filter(tmp_db, sample_session, monkeypatch):
@@ -229,6 +232,14 @@ def test_build_policy_remediation_recommendations():
     assert len(recs) == 1
     assert recs[0]["campaign"] == "ALPHA"
     assert "critical" in recs[0]["approve_cmd"]
+
+
+def test_arp_spoof_classified_as_critical():
+    assert classify_task_risk("arp_spoof") == "critical"
+
+
+def test_arp_spoof_stop_classified_as_low():
+    assert classify_task_risk("arp_spoof_stop") == "low"
 
 
 def test_get_policy_remediation_plan_from_alerts(tmp_db):

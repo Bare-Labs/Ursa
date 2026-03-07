@@ -8,6 +8,7 @@
     <script src="/static/htmx.min.js"></script>
 </head>
 <body>
+    {% set user = request.state.user %}
     <nav class="sidebar">
         <div class="logo">URSA MAJOR</div>
         <a href="/" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
@@ -17,6 +18,17 @@
         <a href="/files/" class="nav-link {% if active_page == 'files' %}active{% endif %}">Files</a>
         <a href="/events/" class="nav-link {% if active_page == 'events' %}active{% endif %}">Events</a>
         <a href="/governance/" class="nav-link {% if active_page == 'governance' %}active{% endif %}">Governance</a>
+        {% if user and user.role == 'admin' %}
+        <a href="/auth/users" class="nav-link {% if active_page == 'users' %}active{% endif %}">Users</a>
+        {% endif %}
+        {% if user %}
+        <div style="margin-top: 16px; font-size: 12px; color: var(--text-secondary);">
+            {{ user.username }} ({{ user.role }})
+        </div>
+        <form method="post" action="/auth/logout" style="margin-top: 8px;">
+            <button type="submit" class="filter-btn">Logout</button>
+        </form>
+        {% endif %}
     </nav>
 
     <main class="content">

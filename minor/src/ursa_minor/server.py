@@ -172,11 +172,12 @@ def _tcp_connect_scan(ip, port, timeout=1):
 # ── Auto-save helper ──
 
 
-def _auto_save(tool_name: str, result: str, metadata: dict | None = None) -> str:
+def _auto_save(tool_name: str, result: str, metadata: dict | None = None,
+               structured_data: list | dict | None = None) -> str:
     """Save a scan result and append the result ID to the output."""
     try:
         from ursa_minor.results import save_result
-        result_id = save_result(tool_name, result, metadata)
+        result_id = save_result(tool_name, result, metadata, structured_data)
         return result + f"\n\n[Saved as {result_id}]"
     except Exception:
         return result
@@ -240,7 +241,9 @@ def discover_network(target_range: str | None = None, timeout: int = 3) -> str:
         lines.append(f"{d['ip']:<18} {d['mac']:<20} {d['vendor']:<15} {notes}")
 
     result = "\n".join(lines)
-    return _auto_save("discover_network", result, {"target_range": target_range})
+    return _auto_save("discover_network", result,
+                      {"target_range": target_range, "devices": len(devices)},
+                      structured_data=devices)
 
 
 @mcp_server.tool()
@@ -328,7 +331,9 @@ def scan_ports(
         lines.append(f"\n{len(open_ports)} open ports found")
 
     result = "\n".join(lines)
-    return _auto_save("scan_ports", result, {"target": target, "ports_scanned": len(port_list)})
+    return _auto_save("scan_ports", result,
+                      {"target": target, "ports_scanned": len(port_list)},
+                      structured_data=open_ports)
 
 
 @mcp_server.tool()
@@ -447,7 +452,16 @@ def sniff_packets(
         for pkt_line in results["packets"][-30:]:
             lines.append(f"  {pkt_line}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    sniff_data = {
+        "packets": results["packets"][-50:],
+        "dns_queries": results["dns_queries"],
+        "connections": [list(c) for c in results["connections"]],
+        "stats": dict(results["stats"]),
+    }
+    return _auto_save("sniff_packets", result,
+                      {"filter": filter_expr, "count": count},
+                      structured_data=sniff_data)
 
 
 @mcp_server.tool()
@@ -560,7 +574,9 @@ def full_recon(
     lines.append(f"Total: {len(devices)} hosts, {total_open} open ports")
 
     result = "\n".join(lines)
-    return _auto_save("full_recon", result, {"target_range": target_range, "hosts": len(devices), "open_ports": total_open})
+    return _auto_save("full_recon", result,
+                      {"target_range": target_range, "hosts": len(devices), "open_ports": total_open},
+                      structured_data=host_results)
 
 
 @mcp_server.tool()
@@ -745,7 +761,11 @@ def enumerate_subdomains(
             for ip, subs in shared.items():
                 lines.append(f"  {ip}: {', '.join(subs[:5])}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    sub_data = [{"subdomain": sub, "ips": ips} for sub, ips in sorted(all_subdomains.items())]
+    return _auto_save("enumerate_subdomains", result,
+                      {"domain": domain, "ct_only": ct_only, "found": len(all_subdomains)},
+                      structured_data=sub_data)
 
 
 @mcp_server.tool()
@@ -861,7 +881,11 @@ def dirbust(
                 lines.append(f"  [{r['status']}] /{r['path']}")
 
     lines.append(f"\n{len(results)} paths found")
-    return "\n".join(lines)
+
+    result = "\n".join(lines)
+    return _auto_save("dirbust", result,
+                      {"url": url, "paths_tested": len(paths), "found": len(results)},
+                      structured_data=results)
 
 
 # ── Credential Tools ──
@@ -949,22 +973,30 @@ def crack_hash(
         hashed = hash_func(candidate.encode()).hexdigest()
         if hashed == target_lower:
             duration = time.time() - start
-            return (
+            result = (
                 f"CRACKED!\n"
                 f"Password:  {candidate}\n"
                 f"Hash type: {hash_type}\n"
                 f"Attempts:  {i + 1}\n"
                 f"Time:      {duration:.2f}s"
             )
+            return _auto_save("crack_hash", result,
+                              {"hash_type": hash_type, "cracked": True},
+                              structured_data={"cracked": True, "password": candidate,
+                                               "hash_type": hash_type, "attempts": i + 1})
 
     duration = time.time() - start
-    return (
+    result = (
         f"Not cracked\n"
         f"Hash type: {hash_type}\n"
         f"Attempts:  {len(candidates)}\n"
         f"Time:      {duration:.2f}s\n"
         f"Try a larger wordlist or use the standalone hashcrack.py with --rules"
     )
+    return _auto_save("crack_hash", result,
+                      {"hash_type": hash_type, "cracked": False},
+                      structured_data={"cracked": False, "password": None,
+                                       "hash_type": hash_type, "attempts": len(candidates)})
 
 
 @mcp_server.tool()
@@ -1205,7 +1237,10 @@ def credential_spray(
     else:
         lines.append("No valid credentials found.")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return _auto_save("credential_spray", result,
+                      {"service": service, "target": target, "port": port, "attempts": attempts},
+                      structured_data=found)
 
 
 # ── Vulnerability Scanning ──
@@ -1366,7 +1401,9 @@ def vuln_scan(
         lines.append("No vulnerabilities detected.")
 
     result = "\n".join(lines)
-    return _auto_save("vuln_scan", result, {"url": url, "tests": tests, "findings": len(all_findings)})
+    return _auto_save("vuln_scan", result,
+                      {"url": url, "tests": tests, "findings": len(all_findings)},
+                      structured_data=all_findings)
 
 
 # ── OS Fingerprinting ──
@@ -1481,7 +1518,12 @@ def os_fingerprint(
     else:
         lines.append("Could not determine OS. Target may be firewalled.")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    guesses = [{"os": name, "score": info["score"], "sources": info["sources"]}
+               for name, info in scored.items()]
+    return _auto_save("os_fingerprint", result,
+                      {"target": target, "mode": "passive" if passive_only else "active"},
+                      structured_data=guesses)
 
 
 # ── SMB Enumeration ──
@@ -1607,7 +1649,14 @@ def smb_enum(
     except Exception:
         pass
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    smb_data = {"port": smb_port}
+    try:
+        smb_data["shares"] = shares
+    except NameError:
+        smb_data["shares"] = []
+    return _auto_save("smb_enum", result, {"target": target, "port": smb_port},
+                      structured_data=smb_data)
 
 
 # ── SNMP Scanning ──
@@ -1759,18 +1808,24 @@ def snmp_scan(
         lines.append(f"No response with community '{community}'.")
         lines.append("Try --brute_force=true or a different community string.")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return _auto_save("snmp_scan", result,
+                      {"target": target, "community": community, "brute_force": brute_force},
+                      structured_data={"target": target, "community": community,
+                                       "responded": any_response})
 
 
 # ── Scan Result Persistence ──
 
 
 from ursa_minor.results import list_results, get_result, export_json, export_csv, export_html
+from ursa_minor.results import export_engagement_report as _engagement_report
 
 
 @mcp_server.tool()
 def list_scan_results(
     tool_filter: str | None = None,
+    target_filter: str | None = None,
     limit: int = 50,
 ) -> str:
     """
@@ -1778,9 +1833,10 @@ def list_scan_results(
 
     Args:
         tool_filter: Filter by tool name (e.g. "scan_ports", "full_recon").
+        target_filter: Filter by target (substring match on metadata values).
         limit: Max results to return (default 50).
     """
-    results = list_results(tool_filter=tool_filter, limit=limit)
+    results = list_results(tool_filter=tool_filter, target_filter=target_filter, limit=limit)
 
     if not results:
         return "No saved scan results found."
@@ -1794,10 +1850,11 @@ def list_scan_results(
 
     for r in results:
         meta = r.get("metadata", {})
-        target = meta.get("target", "")
-        lines.append(f"{r['id']:<40} {r['tool']:<20} {r['timestamp']}")
+        target = meta.get("target", meta.get("target_range", meta.get("url", meta.get("domain", ""))))
+        line = f"{r['id']:<40} {r['tool']:<20} {r['timestamp']}"
         if target:
-            lines[-1] += f"  ({target})"
+            line += f"  ({target})"
+        lines.append(line)
 
     return "\n".join(lines)
 
@@ -1854,6 +1911,27 @@ def export_scan_result(
         return export_html(result_id)
     else:
         return f"Unknown format '{format}'. Use: json, csv, or html."
+
+
+@mcp_server.tool()
+def export_engagement_report(
+    result_ids: str | None = None,
+    tool_filter: str | None = None,
+    title: str = "Engagement Report",
+    format: str = "html",
+) -> str:
+    """
+    Generate a combined report from multiple saved scan results.
+
+    Args:
+        result_ids: Comma-separated result IDs to include. If not provided,
+                    uses all results (filtered by tool_filter).
+        tool_filter: Only include results from this tool type.
+        title: Report title.
+        format: "html", "json", or "csv".
+    """
+    ids = [r.strip() for r in result_ids.split(",")] if result_ids else None
+    return _engagement_report(result_ids=ids, tool_filter=tool_filter, title=title, format=format)
 
 
 # ── ARP Spoof (MCP-exposed with safeguards) ──

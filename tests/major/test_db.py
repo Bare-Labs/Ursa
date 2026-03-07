@@ -501,3 +501,29 @@ class TestCampaignPlaybooks:
         assert row["name"] == "alpha-open-snapshot"
         assert len(row["items"]) == 1
         assert row["items"][0]["title"] == "item one"
+
+
+class TestUsers:
+
+    def test_bootstrap_admin_exists(self, tmp_db):
+        users = db.list_users(limit=20)
+        assert any(u["username"] == "admin" and u["role"] == "admin" for u in users)
+
+    def test_create_and_authenticate_user(self, tmp_db):
+        created = db.create_user("alice", "s3cret!", role="reviewer")
+        assert created is not None
+        assert created["username"] == "alice"
+        assert created["role"] == "reviewer"
+        auth = db.authenticate_user("alice", "s3cret!")
+        assert auth is not None
+        assert auth["username"] == "alice"
+
+    def test_password_reset_and_role_update(self, tmp_db):
+        created = db.create_user("bob", "initial-pass", role="operator")
+        user_id = created["id"]
+        assert db.update_user_role_status(user_id, role="admin", is_active=False) is True
+        assert db.authenticate_user("bob", "initial-pass") is None
+        assert db.update_user_role_status(user_id, is_active=True) is True
+        assert db.set_user_password(user_id, "new-pass") is True
+        assert db.authenticate_user("bob", "initial-pass") is None
+        assert db.authenticate_user("bob", "new-pass") is not None

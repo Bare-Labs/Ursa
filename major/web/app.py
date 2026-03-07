@@ -5,10 +5,16 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+from major.config import get_config
+from major.db import get_user_by_id
 
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -17,6 +23,15 @@ WEB_DIR = Path(__file__).parent
 
 app = FastAPI(title="Ursa Major C2", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
+
+session_secret = str(get_config().get("major.web.auth.session_secret", "ursa-dev-session-secret"))
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret,
+    session_cookie="ursa_web_session",
+    same_site="lax",
+    https_only=False,
+)
 
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
@@ -86,6 +101,7 @@ templates.env.filters["filesizeformat"] = filesizeformat
 # -- Register Routers --
 
 from major.web.routes import (  # noqa: E402
+    auth,
     campaigns,
     dashboard,
     events,
@@ -96,6 +112,36 @@ from major.web.routes import (  # noqa: E402
     tasks,
 )
 
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    path = request.url.path
+    request.state.user = None
+    public_paths = {"/auth/login"}
+    if path.startswith("/static") or path in public_paths:
+        return await call_next(request)
+
+    user = None
+    user_id = request.session.get("user_id")
+    if user_id:
+        user = get_user_by_id(user_id)
+        if user and user.get("is_active"):
+            request.state.user = user
+        else:
+            request.session.clear()
+
+    if not user:
+        next_path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        login_url = f"/auth/login?next={quote(next_path, safe='')}"
+        if request.headers.get("HX-Request"):
+            response = Response(status_code=401)
+            response.headers["HX-Redirect"] = login_url
+            return response
+        return RedirectResponse(url=login_url, status_code=303)
+    return await call_next(request)
+
+
+app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(campaigns.router)
 app.include_router(sessions.router)

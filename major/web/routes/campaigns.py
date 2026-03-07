@@ -32,6 +32,7 @@ from major.db import (
 )
 from major.governance import get_policy_remediation_plan
 from major.web.app import templates
+from major.web.auth import actor_for, require_role
 
 router = APIRouter(prefix="/campaigns")
 CHECKLIST_STATUSES = {"pending", "in_progress", "blocked", "done"}
@@ -136,6 +137,7 @@ async def campaign_list(request: Request):
 
 @router.get("/playbooks")
 async def campaign_playbooks_page(request: Request):
+    _ = require_role(request, "admin")
     playbooks = list_campaign_playbooks(limit=300)
     return templates.TemplateResponse(
         "campaign_playbooks.html",
@@ -149,6 +151,7 @@ async def campaign_playbooks_page(request: Request):
 
 @router.post("/playbooks/save")
 async def campaign_playbooks_save(request: Request):
+    _ = require_role(request, "admin")
     form = await request.form()
     name = str(form.get("name", "")).strip()
     description = str(form.get("description", "")).strip()
@@ -162,7 +165,8 @@ async def campaign_playbooks_save(request: Request):
 
 
 @router.post("/playbooks/{name}/delete")
-async def campaign_playbooks_delete(name: str):
+async def campaign_playbooks_delete(request: Request, name: str):
+    _ = require_role(request, "admin")
     _ = delete_campaign_playbook(name.strip())
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = "/campaigns/playbooks"
@@ -170,7 +174,8 @@ async def campaign_playbooks_delete(name: str):
 
 
 @router.get("/playbooks/{name}/export")
-async def campaign_playbook_export(name: str):
+async def campaign_playbook_export(request: Request, name: str):
+    _ = require_role(request, "admin")
     playbook = get_campaign_playbook(name.strip())
     if not playbook:
         return Response(content="playbook not found", status_code=404)
@@ -266,18 +271,19 @@ async def campaign_detail(request: Request, campaign_name: str):
 
 @router.post("/{campaign_name}/notes")
 async def campaign_add_note(request: Request, campaign_name: str):
+    user = require_role(request, "operator")
     form = await request.form()
-    author = str(form.get("author", "web-ui:operator")).strip() or "web-ui:operator"
     note = str(form.get("note", "")).strip()
     if note:
-        add_campaign_note(campaign_name, note, author=author)
+        add_campaign_note(campaign_name, note, author=f"web:{user['username']}")
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = f"/campaigns/{campaign_name}"
     return response
 
 
 @router.post("/{campaign_name}/notes/{note_id}/delete")
-async def campaign_delete_note(campaign_name: str, note_id: int):
+async def campaign_delete_note(request: Request, campaign_name: str, note_id: int):
+    _ = require_role(request, "operator")
     _ = delete_campaign_note(note_id)
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = f"/campaigns/{campaign_name}"
@@ -286,6 +292,7 @@ async def campaign_delete_note(campaign_name: str, note_id: int):
 
 @router.post("/{campaign_name}/checklist")
 async def campaign_add_checklist_item(request: Request, campaign_name: str):
+    _ = require_role(request, "operator")
     form = await request.form()
     title = str(form.get("title", "")).strip()
     details = str(form.get("details", "")).strip()
@@ -302,6 +309,7 @@ async def campaign_add_checklist_item(request: Request, campaign_name: str):
             details=details,
             owner=owner,
             due_at=due_at,
+            actor=actor_for(request, "campaigns/checklist-add"),
         )
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = _campaign_redirect(
@@ -316,6 +324,7 @@ async def campaign_add_checklist_item(request: Request, campaign_name: str):
 
 @router.post("/{campaign_name}/checklist/{item_id}/update")
 async def campaign_update_checklist_item(request: Request, campaign_name: str, item_id: int):
+    _ = require_role(request, "operator")
     form = await request.form()
     status_filter = str(form.get("status_filter", "")).strip().lower()
     owner_filter = str(form.get("owner_filter", "")).strip()
@@ -337,7 +346,7 @@ async def campaign_update_checklist_item(request: Request, campaign_name: str, i
     if "due_at" in form:
         updates["due_at"] = _parse_due_at(str(form.get("due_at", "")))
     if updates:
-        update_campaign_checklist_item(item_id, **updates)
+        update_campaign_checklist_item(item_id, actor=actor_for(request, "campaigns/checklist-update"), **updates)
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = _campaign_redirect(
         campaign_name,
@@ -351,12 +360,13 @@ async def campaign_update_checklist_item(request: Request, campaign_name: str, i
 
 @router.post("/{campaign_name}/checklist/{item_id}/delete")
 async def campaign_delete_checklist_item(request: Request, campaign_name: str, item_id: int):
+    _ = require_role(request, "operator")
     form = await request.form()
     status_filter = str(form.get("status_filter", "")).strip().lower()
     owner_filter = str(form.get("owner_filter", "")).strip()
     text_filter = str(form.get("q_filter", "")).strip()
     sort_filter = str(form.get("sort_filter", "created_desc")).strip().lower()
-    _ = delete_campaign_checklist_item(item_id)
+    _ = delete_campaign_checklist_item(item_id, actor=actor_for(request, "campaigns/checklist-delete"))
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = _campaign_redirect(
         campaign_name,
@@ -370,6 +380,7 @@ async def campaign_delete_checklist_item(request: Request, campaign_name: str, i
 
 @router.post("/{campaign_name}/checklist/bulk")
 async def campaign_bulk_update_checklist(request: Request, campaign_name: str):
+    _ = require_role(request, "operator")
     form = await request.form()
     action_status = str(form.get("action_status", "")).strip().lower()
     status_filter = str(form.get("status_filter", "")).strip().lower()
@@ -386,7 +397,11 @@ async def campaign_bulk_update_checklist(request: Request, campaign_name: str):
             limit=1000,
         )
         for row in rows:
-            update_campaign_checklist_item(int(row["id"]), status=action_status)
+            update_campaign_checklist_item(
+                int(row["id"]),
+                status=action_status,
+                actor=actor_for(request, "campaigns/checklist-bulk"),
+            )
     response = Response(status_code=200)
     response.headers["HX-Redirect"] = _campaign_redirect(
         campaign_name,
@@ -400,6 +415,7 @@ async def campaign_bulk_update_checklist(request: Request, campaign_name: str):
 
 @router.post("/{campaign_name}/playbook/apply")
 async def campaign_apply_playbook(request: Request, campaign_name: str):
+    _ = require_role(request, "operator")
     form = await request.form()
     playbook_name = str(form.get("playbook", "")).strip()
     owner = str(form.get("owner", "")).strip()
@@ -427,6 +443,7 @@ async def campaign_apply_playbook(request: Request, campaign_name: str):
 
 @router.post("/{campaign_name}/playbook/snapshot")
 async def campaign_snapshot_playbook(request: Request, campaign_name: str):
+    _ = require_role(request, "operator")
     form = await request.form()
     playbook_name = str(form.get("playbook_name", "")).strip()
     description = str(form.get("description", "")).strip()

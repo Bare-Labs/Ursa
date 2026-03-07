@@ -1174,6 +1174,7 @@ def ursa_campaign_add_checklist_item(
         details=details.strip(),
         owner=owner.strip(),
         due_at=due_ts,
+        actor="mcp:ursa_campaign_add_checklist_item",
     )
     return f"Added checklist item {item_id} to campaign {name}."
 
@@ -1207,14 +1208,14 @@ def ursa_campaign_update_checklist_item(
             return "due_at must be ISO date/datetime (example: 2026-03-08T14:30)."
     if not updates:
         return "No updates supplied."
-    changed = update_campaign_checklist_item(item_id, **updates)
+    changed = update_campaign_checklist_item(item_id, actor="mcp:ursa_campaign_update_checklist_item", **updates)
     return f"Updated checklist item {item_id}." if changed else f"Checklist item {item_id} not found."
 
 
 @mcp_server.tool()
 def ursa_campaign_delete_checklist_item(item_id: int) -> str:
     """Delete one checklist item by ID."""
-    deleted = delete_campaign_checklist_item(item_id)
+    deleted = delete_campaign_checklist_item(item_id, actor="mcp:ursa_campaign_delete_checklist_item")
     return f"Deleted checklist item {item_id}." if deleted else f"Checklist item {item_id} not found."
 
 
@@ -1249,7 +1250,11 @@ def ursa_campaign_bulk_update_checklist(
     for row in rows:
         if row.get("status") == target:
             continue
-        if update_campaign_checklist_item(int(row["id"]), status=target):
+        if update_campaign_checklist_item(
+            int(row["id"]),
+            status=target,
+            actor="mcp:ursa_campaign_bulk_update_checklist",
+        ):
             changed += 1
     return (
         f"Checklist bulk update complete.\n"
@@ -1351,6 +1356,7 @@ def ursa_campaign_checklist_from_alerts(
             details=details,
             owner=owner.strip(),
             due_at=due_at,
+            actor="mcp:ursa_campaign_checklist_from_alerts",
         )
         created += 1
         existing_titles.add(title.lower())

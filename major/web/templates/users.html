@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Users — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>User Administration</h1>
+</div>
+
+<div class="card">
+    <h2>Create User</h2>
+    <form class="shell-form" method="post" action="/auth/users/create">
+        <input type="text" name="username" placeholder="Username" required>
+        <input type="password" name="password" placeholder="Password" required>
+        <select name="role">
+            <option value="operator">operator</option>
+            <option value="reviewer">reviewer</option>
+            <option value="admin">admin</option>
+        </select>
+        <label style="display:flex; align-items:center; gap:6px; color: var(--text-secondary);">
+            <input type="checkbox" name="is_active" value="1" checked>
+            active
+        </label>
+        <button type="submit">Create</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Users</h2>
+    {% if users %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Active</th>
+                <th>Last Login</th>
+                <th>Created</th>
+                <th>Update</th>
+                <th>Reset Password</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td class="mono">{{ u.id }}</td>
+                <td class="mono">{{ u.username }}</td>
+                <td>{{ u.role }}</td>
+                <td>{{ "yes" if u.is_active else "no" }}</td>
+                <td>{{ u.last_login_at | format_ts if u.last_login_at else "-" }}</td>
+                <td>{{ u.created_at | format_ts }}</td>
+                <td>
+                    <form class="shell-form" method="post" action="/auth/users/{{ u.id }}/update">
+                        <select name="role">
+                            <option value="operator" {% if u.role == "operator" %}selected{% endif %}>operator</option>
+                            <option value="reviewer" {% if u.role == "reviewer" %}selected{% endif %}>reviewer</option>
+                            <option value="admin" {% if u.role == "admin" %}selected{% endif %}>admin</option>
+                        </select>
+                        <label style="display:flex; align-items:center; gap:6px;">
+                            <input type="checkbox" name="is_active" value="1" {% if u.is_active %}checked{% endif %}>
+                            active
+                        </label>
+                        <button type="submit">Save</button>
+                    </form>
+                </td>
+                <td>
+                    <form class="shell-form" method="post" action="/auth/users/{{ u.id }}/password">
+                        <input type="password" name="password" placeholder="new password" required>
+                        <button type="submit">Reset</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No users found.</div>
+    {% endif %}
+</div>
+{% endblock %}

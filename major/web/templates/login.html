@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Login — Ursa Major{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Operator Login</h1>
+</div>
+
+<div class="card" style="max-width: 560px;">
+    <form class="shell-form" method="post" action="/auth/login">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <input type="text" name="username" placeholder="Username" required autofocus>
+        <input type="password" name="password" placeholder="Password" required>
+        <button type="submit">Sign In</button>
+    </form>
+    {% if error %}
+    <div class="empty-state" style="color: var(--red); margin-top: 8px;">{{ error }}</div>
+    {% endif %}
+</div>
+{% endblock %}

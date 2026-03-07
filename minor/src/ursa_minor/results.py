@@ -7,6 +7,7 @@ Results are stored in ~/.ursa/results/ (configurable via ursa.yaml).
 """
 
 import csv
+import html
 import io
 import json
 import os
@@ -33,13 +34,19 @@ def _get_results_dir() -> Path:
     return results_dir
 
 
-def save_result(tool_name: str, result_data: str, metadata: dict | None = None) -> str:
+def save_result(
+    tool_name: str,
+    result_data: str,
+    metadata: dict | None = None,
+    structured_data: list | dict | None = None,
+) -> str:
     """Save a scan result to disk.
 
     Args:
         tool_name: Name of the MCP tool (e.g. "scan_ports")
         result_data: The raw text output from the tool
         metadata: Optional dict with extra info (target, args, etc.)
+        structured_data: Optional structured results (list of dicts, dict, etc.)
 
     Returns:
         Result ID (filename stem) for later retrieval.
@@ -58,17 +65,27 @@ def save_result(tool_name: str, result_data: str, metadata: dict | None = None) 
         "result": result_data,
     }
 
+    if structured_data is not None:
+        record["structured_data"] = structured_data
+
     with open(filepath, "w") as f:
-        json.dump(record, f, indent=2)
+        json.dump(record, f, indent=2, default=str)
 
     return result_id
 
 
-def list_results(tool_filter: str | None = None, limit: int = 50) -> list[dict]:
+def list_results(
+    tool_filter: str | None = None,
+    target_filter: str | None = None,
+    since: float | None = None,
+    limit: int = 50,
+) -> list[dict]:
     """List saved scan results.
 
     Args:
         tool_filter: Filter by tool name (substring match).
+        target_filter: Filter by target (substring match on metadata values).
+        since: Only return results newer than this Unix timestamp.
         limit: Max results to return.
 
     Returns:
@@ -79,12 +96,19 @@ def list_results(tool_filter: str | None = None, limit: int = 50) -> list[dict]:
 
     json_files = sorted(results_dir.glob("*.json"), key=os.path.getmtime, reverse=True)
 
-    for filepath in json_files[:limit * 2]:  # read extra in case of filter
+    for filepath in json_files[:limit * 3]:  # read extra in case of filters
         try:
             with open(filepath) as f:
                 record = json.load(f)
             if tool_filter and tool_filter.lower() not in record.get("tool", "").lower():
                 continue
+            if since and record.get("timestamp", 0) < since:
+                continue
+            if target_filter:
+                meta = record.get("metadata", {})
+                meta_values = " ".join(str(v) for v in meta.values()).lower()
+                if target_filter.lower() not in meta_values:
+                    continue
             results.append({
                 "id": record.get("id", filepath.stem),
                 "tool": record.get("tool", "unknown"),
@@ -115,35 +139,126 @@ def get_result(result_id: str) -> dict | None:
         return json.load(f)
 
 
+def delete_result(result_id: str) -> bool:
+    """Delete a saved scan result.
+
+    Returns:
+        True if deleted, False if not found.
+    """
+    results_dir = _get_results_dir()
+    filepath = results_dir / f"{result_id}.json"
+
+    if not filepath.exists():
+        return False
+
+    filepath.unlink()
+    return True
+
+
 def export_json(result_id: str) -> str:
     """Export a result as formatted JSON."""
     record = get_result(result_id)
     if not record:
         return f"Result {result_id} not found."
-    return json.dumps(record, indent=2)
+    return json.dumps(record, indent=2, default=str)
 
 
 def export_csv(result_id: str) -> str:
-    """Export a result as CSV. Best-effort tabular conversion."""
+    """Export a result as CSV. Uses structured data when available."""
     record = get_result(result_id)
     if not record:
         return f"Result {result_id} not found."
 
-    result_text = record.get("result", "")
     output = io.StringIO()
-    writer = csv.writer(output)
 
-    # Write header row with metadata
+    # If structured data is a list of dicts, write proper tabular CSV
+    structured = record.get("structured_data")
+    if structured and isinstance(structured, list) and structured and isinstance(structured[0], dict):
+        writer = csv.DictWriter(output, fieldnames=structured[0].keys())
+        writer.writeheader()
+        writer.writerows(structured)
+        return output.getvalue()
+
+    # Fallback: dump text lines
+    writer = csv.writer(output)
     writer.writerow(["tool", "timestamp", "result_id"])
     writer.writerow([record.get("tool", ""), record.get("timestamp_str", ""), result_id])
     writer.writerow([])
 
-    # Try to parse result as structured data, else dump as text rows
+    result_text = record.get("result", "")
     lines = result_text.strip().split("\n")
     for line in lines:
         writer.writerow([line])
 
     return output.getvalue()
+
+
+def _render_structured_html(tool: str, structured_data: list | dict) -> str:
+    """Render structured data as HTML tables based on tool type."""
+    if isinstance(structured_data, list) and structured_data and isinstance(structured_data[0], dict):
+        # Generic table for list-of-dicts
+        keys = list(structured_data[0].keys())
+        header = "".join(f"<th>{html.escape(str(k))}</th>" for k in keys)
+        rows = ""
+        for item in structured_data:
+            cells = ""
+            for k in keys:
+                val = str(item.get(k, ""))
+                # Color severity values
+                css = ""
+                if k == "severity" or k == "risk_level":
+                    level = val.lower()
+                    if level == "critical":
+                        css = ' style="color:var(--red);font-weight:bold"'
+                    elif level == "high":
+                        css = ' style="color:var(--yellow);font-weight:bold"'
+                cells += f"<td{css}>{html.escape(val)}</td>"
+            rows += f"<tr>{cells}</tr>\n"
+        return f"<table><tr>{header}</tr>\n{rows}</table>"
+
+    if isinstance(structured_data, dict):
+        # Key-value table for dicts
+        rows = ""
+        for k, v in structured_data.items():
+            if isinstance(v, (list, dict)):
+                val = json.dumps(v, indent=2, default=str)
+                rows += f"<tr><td>{html.escape(str(k))}</td><td><pre>{html.escape(val)}</pre></td></tr>\n"
+            else:
+                rows += f"<tr><td>{html.escape(str(k))}</td><td>{html.escape(str(v))}</td></tr>\n"
+        return f"<table><tr><th>Key</th><th>Value</th></tr>\n{rows}</table>"
+
+    return ""
+
+
+_HTML_STYLE = """:root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    padding: 2rem; line-height: 1.5;
+  }
+  h1 { color: var(--accent); margin-bottom: 0.5rem; font-size: 1.5rem; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+  .meta { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
+  table {
+    width: 100%; border-collapse: collapse; margin-bottom: 1.5rem;
+    background: var(--surface); border-radius: 6px; overflow: hidden;
+  }
+  th, td {
+    padding: 0.6rem 1rem; text-align: left; border-bottom: 1px solid var(--border);
+  }
+  th { background: var(--border); color: var(--text-muted); font-weight: 600; font-size: 0.85rem; }
+  pre {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 1rem; overflow-x: auto; font-family: 'SF Mono', Monaco, monospace;
+    font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;
+  }
+  .section { margin-bottom: 2rem; }
+  .footer { color: var(--text-muted); font-size: 0.8rem; margin-top: 2rem; text-align: center; }"""
 
 
 def export_html(result_id: str) -> str:
@@ -156,58 +271,135 @@ def export_html(result_id: str) -> str:
     timestamp = record.get("timestamp_str", "")
     metadata = record.get("metadata", {})
     result_text = record.get("result", "")
-
-    # Escape HTML
-    import html
-    result_html = html.escape(result_text)
+    structured = record.get("structured_data")
 
     meta_rows = ""
     for k, v in metadata.items():
         meta_rows += f"<tr><td>{html.escape(str(k))}</td><td>{html.escape(str(v))}</td></tr>\n"
+
+    meta_section = ""
+    if meta_rows:
+        meta_section = f"<h2>Scan Parameters</h2>\n<table><tr><th>Key</th><th>Value</th></tr>\n{meta_rows}</table>"
+
+    # Render structured data as proper tables when available
+    data_section = ""
+    if structured:
+        data_section = f"<h2>Results</h2>\n{_render_structured_html(tool, structured)}"
+
+    output_section = f"<h2>Output</h2>\n<pre>{html.escape(result_text)}</pre>"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <title>Ursa Minor — {html.escape(tool)} Report</title>
-<style>
-  :root {{
-    --bg: #0d1117; --surface: #161b22; --border: #30363d;
-    --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff;
-    --green: #3fb950; --yellow: #d29922; --red: #f85149;
-  }}
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{
-    background: var(--bg); color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    padding: 2rem; line-height: 1.5;
-  }}
-  h1 {{ color: var(--accent); margin-bottom: 0.5rem; font-size: 1.5rem; }}
-  .meta {{ color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }}
-  table {{
-    width: 100%; border-collapse: collapse; margin-bottom: 1.5rem;
-    background: var(--surface); border-radius: 6px; overflow: hidden;
-  }}
-  th, td {{
-    padding: 0.6rem 1rem; text-align: left; border-bottom: 1px solid var(--border);
-  }}
-  th {{ background: var(--border); color: var(--text-muted); font-weight: 600; font-size: 0.85rem; }}
-  pre {{
-    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
-    padding: 1rem; overflow-x: auto; font-family: 'SF Mono', Monaco, monospace;
-    font-size: 0.85rem; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word;
-  }}
-  .footer {{ color: var(--text-muted); font-size: 0.8rem; margin-top: 2rem; text-align: center; }}
-</style>
+<style>{_HTML_STYLE}</style>
 </head>
 <body>
   <h1>Ursa Minor — {html.escape(tool)}</h1>
   <p class="meta">Generated: {html.escape(timestamp)} | ID: {html.escape(result_id)}</p>
 
-  {"<h2 style='font-size:1.1rem;margin-bottom:0.5rem;'>Metadata</h2><table><tr><th>Key</th><th>Value</th></tr>" + meta_rows + "</table>" if meta_rows else ""}
+  {meta_section}
+  {data_section}
+  {output_section}
 
-  <h2 style="font-size:1.1rem;margin-bottom:0.5rem;">Output</h2>
-  <pre>{result_html}</pre>
+  <p class="footer">Ursa Minor Recon Toolkit — Bare Labs</p>
+</body>
+</html>"""
+
+
+def export_engagement_report(
+    result_ids: list[str] | None = None,
+    tool_filter: str | None = None,
+    title: str = "Engagement Report",
+    format: str = "html",
+) -> str:
+    """Generate a combined report from multiple scan results.
+
+    Args:
+        result_ids: Specific result IDs to include. Uses all if None.
+        tool_filter: Filter by tool name when result_ids is None.
+        title: Report title.
+        format: "html", "json", or "csv".
+
+    Returns:
+        Report content as a string.
+    """
+    # Gather records
+    if result_ids:
+        records = []
+        for rid in result_ids:
+            rec = get_result(rid)
+            if rec:
+                records.append(rec)
+    else:
+        listing = list_results(tool_filter=tool_filter, limit=200)
+        records = []
+        for item in listing:
+            rec = get_result(item["id"])
+            if rec:
+                records.append(rec)
+
+    if not records:
+        return "No results found for engagement report."
+
+    if format == "json":
+        report = {
+            "title": title,
+            "generated_at": datetime.now().isoformat(),
+            "result_count": len(records),
+            "results": records,
+        }
+        return json.dumps(report, indent=2, default=str)
+
+    if format == "csv":
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["result_id", "tool", "timestamp", "target", "output"])
+        for rec in records:
+            target = rec.get("metadata", {}).get("target", rec.get("metadata", {}).get("target_range", ""))
+            writer.writerow([
+                rec.get("id", ""),
+                rec.get("tool", ""),
+                rec.get("timestamp_str", ""),
+                target,
+                rec.get("result", "")[:500],
+            ])
+        return output.getvalue()
+
+    # HTML format
+    sections = ""
+    for rec in records:
+        tool = rec.get("tool", "unknown")
+        rid = rec.get("id", "unknown")
+        ts = rec.get("timestamp_str", "")
+        structured = rec.get("structured_data")
+        result_text = rec.get("result", "")
+
+        data_html = ""
+        if structured:
+            data_html = _render_structured_html(tool, structured)
+
+        sections += f"""<div class="section">
+  <h2>{html.escape(tool)} <span style="color:var(--text-muted);font-size:0.8rem">({html.escape(rid)})</span></h2>
+  <p class="meta">{html.escape(ts)}</p>
+  {data_html}
+  <pre>{html.escape(result_text)}</pre>
+</div>
+"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ursa Minor — {html.escape(title)}</title>
+<style>{_HTML_STYLE}</style>
+</head>
+<body>
+  <h1>{html.escape(title)}</h1>
+  <p class="meta">Generated: {html.escape(datetime.now().isoformat())} | Results: {len(records)}</p>
+
+  {sections}
 
   <p class="footer">Ursa Minor Recon Toolkit — Bare Labs</p>
 </body>
