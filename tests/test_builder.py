@@ -63,7 +63,7 @@ class TestPayloadConfig:
         tokens = cfg.tokens()
         assert tokens["URSA_C2_URL"] == "http://1.2.3.4:8443"
         assert tokens["URSA_INTERVAL"] == "5"
-        assert tokens["URSA_JITTER"] == "0.1"
+        assert tokens["URSA_JITTER"] == "0.3"
 
     def test_tokens_custom_values(self, config: PayloadConfig):
         tokens = config.tokens()
@@ -420,3 +420,282 @@ class TestRealZigTemplate:
         if "http_zig" not in b.list_templates():
             pytest.skip("http_zig template not present")
         assert b.template_path("http_zig").suffix == ".zig"
+
+
+# ── Obfuscation ───────────────────────────────────────────────────────────────
+
+
+class TestObfuscation:
+    """Tests for Builder._obfuscate() and PayloadConfig.obfuscate flag."""
+
+    def test_obfuscate_flag_default_false(self):
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443")
+        assert cfg.obfuscate is False
+
+    def test_obfuscate_flag_can_be_set(self):
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443", obfuscate=True)
+        assert cfg.obfuscate is True
+
+    def test_obfuscate_output_is_string(self):
+        source = 'print("hello world")\n'
+        result = Builder._obfuscate(source)
+        assert isinstance(result, str)
+
+    def test_obfuscate_output_differs_from_input(self):
+        source = 'C2 = "http://10.0.0.1:8443"\n'
+        result = Builder._obfuscate(source)
+        assert result != source
+
+    def test_obfuscate_hides_c2_url(self):
+        source = 'C2_URL = "http://10.0.0.1:8443"\n'
+        result = Builder._obfuscate(source)
+        assert "http://10.0.0.1:8443" not in result
+
+    def test_obfuscate_output_is_valid_python(self):
+        source = 'x = 1 + 1\n'
+        stub = Builder._obfuscate(source)
+        # Should compile without errors
+        compile(stub, "<obfuscated>", "exec")
+
+    def test_obfuscate_exec_produces_correct_result(self):
+        source = 'result = 2 + 2\n'
+        stub = Builder._obfuscate(source)
+        ns: dict = {}
+        exec(stub, ns)
+        assert ns["result"] == 4
+
+    def test_obfuscate_randomized_key_each_call(self):
+        source = 'x = 42\n'
+        stub1 = Builder._obfuscate(source)
+        stub2 = Builder._obfuscate(source)
+        # Different keys → different encoded output (with overwhelming probability)
+        assert stub1 != stub2
+
+    def test_build_without_obfuscate_contains_c2_url(self, tmp_templates, builder):
+        cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="basic", obfuscate=False)
+        source = builder.build(cfg)
+        assert "http://10.0.0.1:8443" in source
+
+    def test_build_with_obfuscate_hides_c2_url(self, tmp_templates, builder):
+        cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="basic", obfuscate=True)
+        source = builder.build(cfg)
+        assert "http://10.0.0.1:8443" not in source
+
+    def test_build_with_obfuscate_exec_works(self, tmp_templates, builder):
+        cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="basic", obfuscate=True)
+        stub = builder.build(cfg)
+        # The template sets C2 = "http://10.0.0.1:8443" — exec and verify
+        ns: dict = {}
+        exec(stub, ns)
+        assert ns.get("C2") == "http://10.0.0.1:8443"
+
+
+# ── Beacon UA rotation ─────────────────────────────────────────────────────────
+
+
+class TestBeaconUARotation:
+    def test_user_agent_pool_is_non_empty(self):
+        from implants.beacon import _USER_AGENTS
+        assert len(_USER_AGENTS) >= 4
+
+    def test_user_agent_pool_values_are_strings(self):
+        from implants.beacon import _USER_AGENTS
+        for ua in _USER_AGENTS:
+            assert isinstance(ua, str)
+            assert len(ua) > 20
+
+    def test_beacon_picks_ua_from_pool(self):
+        from implants.beacon import UrsaBeacon, _USER_AGENTS
+        b = UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False)
+        assert b.user_agent in _USER_AGENTS
+
+    def test_different_instances_may_pick_different_uas(self):
+        from implants.beacon import UrsaBeacon, _USER_AGENTS
+        # With 7 choices, chance all 10 picks are the same is (1/7)^9 ≈ negligible
+        if len(_USER_AGENTS) < 2:
+            pytest.skip("Only one UA in pool")
+        uas = {UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False).user_agent
+               for _ in range(20)}
+        assert len(uas) > 1
+
+
+# ── Beacon jitter ─────────────────────────────────────────────────────────────
+
+
+class TestBeaconJitter:
+    def test_jitter_clamped_to_valid_range(self):
+        from implants.beacon import UrsaBeacon
+        b = UrsaBeacon("http://127.0.0.1:8443", jitter=5.0, sandbox_check=False)
+        assert 0.0 <= b.jitter <= 1.0
+
+    def test_jitter_negative_clamped_to_zero(self):
+        from implants.beacon import UrsaBeacon
+        b = UrsaBeacon("http://127.0.0.1:8443", jitter=-1.0, sandbox_check=False)
+        assert b.jitter == 0.0
+
+    def test_default_jitter_is_0_3(self):
+        from implants.beacon import UrsaBeacon
+        b = UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False)
+        assert b.jitter == 0.3
+
+    def test_jitter_sleep_stays_above_minimum(self):
+        """_jitter_sleep must never sleep less than 1 second."""
+        import unittest.mock as mock
+        from implants.beacon import UrsaBeacon
+        b = UrsaBeacon("http://127.0.0.1:8443", interval=1, jitter=0.9,
+                        sandbox_check=False)
+        sleep_calls = []
+        with mock.patch("time.sleep", side_effect=lambda t: sleep_calls.append(t)):
+            b._jitter_sleep()
+        assert sleep_calls, "sleep was not called"
+        assert sleep_calls[0] >= 1
+
+
+# ── Process name spoofing ─────────────────────────────────────────────────────
+
+
+class TestBeaconProcessName:
+    def test_no_process_name_no_crash(self):
+        """Default (empty) process_name should not call spoof."""
+        from implants.beacon import UrsaBeacon
+        b = UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False)
+        # Just checking it constructs cleanly
+        assert b is not None
+
+    def test_process_name_changes_argv0(self):
+        """Passing process_name should mutate sys.argv[0]."""
+        import sys
+        from implants.beacon import UrsaBeacon
+        original = sys.argv[0]
+        UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False,
+                   process_name="fake-process")
+        assert sys.argv[0] == "fake-process"
+        sys.argv[0] = original  # restore
+
+    def test_process_name_empty_string_no_change(self):
+        """Empty string process_name leaves argv[0] unchanged."""
+        import sys
+        from implants.beacon import UrsaBeacon
+        original = sys.argv[0]
+        UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False, process_name="")
+        assert sys.argv[0] == original
+
+
+# ── Go template ───────────────────────────────────────────────────────────────
+
+
+class TestGoTemplate:
+    """Tests for the http_go.go template."""
+
+    def test_go_template_listed(self):
+        from implants.builder import Builder
+        templates = Builder().list_templates()
+        assert "http_go" in templates
+
+    def test_go_template_has_go_extension(self):
+        from implants.builder import Builder
+        path = Builder().template_path("http_go")
+        assert path.suffix == ".go"
+
+    def test_go_template_builds(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src = Builder().build(cfg)
+        assert isinstance(src, str)
+        assert len(src) > 100
+
+    def test_go_template_substitutes_c2_url(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://10.1.2.3:9999", template="http_go")
+        src = Builder().build(cfg)
+        assert "http://10.1.2.3:9999" in src
+        assert "URSA_C2_URL" not in src
+
+    def test_go_template_substitutes_interval(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", interval=30,
+                            template="http_go")
+        src = Builder().build(cfg)
+        assert "URSA_INTERVAL" not in src
+        assert "30" in src
+
+    def test_go_template_substitutes_jitter(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", jitter=0.5,
+                            template="http_go")
+        src = Builder().build(cfg)
+        assert "URSA_JITTER" not in src
+        assert "0.5" in src
+
+    def test_go_template_is_valid_go_package(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src = Builder().build(cfg)
+        assert "package main" in src
+        assert "func main()" in src
+
+    def test_go_template_has_all_task_types(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src = Builder().build(cfg)
+        for task in ("shell", "sysinfo", "ps", "whoami", "pwd", "cd",
+                     "ls", "env", "download", "upload", "sleep", "kill"):
+            assert f'case "{task}"' in src, f"Missing task type: {task}"
+
+    def test_go_template_has_ua_pool(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src = Builder().build(cfg)
+        assert "Mozilla" in src
+        assert "userAgents" in src
+
+    def test_go_template_has_jitter_sleep(self):
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src = Builder().build(cfg)
+        assert "jitterSleep" in src
+
+    @pytest.mark.skipif(
+        __import__("shutil").which("go") is None,
+        reason="Go compiler not installed"
+    )
+    def test_go_template_compiles(self, tmp_path):
+        """Build the template and compile it with 'go build'."""
+        import subprocess
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(
+            c2_url="http://127.0.0.1:8443",
+            template="http_go",
+            post_build="go build -o {binary} {output}",
+        )
+        src_path = tmp_path / "agent.go"
+        binary_path = Builder().build_to_file(cfg, src_path)
+        # Run go build directly (post_build via Builder.compile would work too)
+        result = subprocess.run(
+            ["go", "build", "-o", str(tmp_path / "agent"), str(src_path)],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (
+            f"go build failed:\n{result.stdout}\n{result.stderr}"
+        )
+        assert (tmp_path / "agent").exists()
+
+    @pytest.mark.skipif(
+        __import__("shutil").which("go") is None,
+        reason="Go compiler not installed"
+    )
+    def test_go_template_cross_compiles_linux(self, tmp_path):
+        """Cross-compile for Linux/amd64 from any host."""
+        import subprocess
+        from implants.builder import Builder, PayloadConfig
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src_path = Builder().build_to_file(cfg, tmp_path / "agent.go")
+        env = {**__import__("os").environ, "GOOS": "linux", "GOARCH": "amd64"}
+        result = subprocess.run(
+            ["go", "build", "-o", str(tmp_path / "agent-linux"), str(src_path)],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, (
+            f"cross-compile failed:\n{result.stdout}\n{result.stderr}"
+        )
+        assert (tmp_path / "agent-linux").exists()
