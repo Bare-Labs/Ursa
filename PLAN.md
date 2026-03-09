@@ -23,9 +23,9 @@ This plan aligns Ursa with `PORTFOLIO-PRIORITY.md`:
 - [x] Phase 1: Testing + CI baseline
 - [x] Phase 2: Ursa Major web UI
 - [x] Phase 3: Configuration + persistence polish
-- [ ] Phase 4: Expanded implants
-- [ ] Phase 5: Post-exploitation modules
-- [ ] Phase 6: Advanced C2 features
+- [x] Phase 4: Expanded implants
+- [x] Phase 5: Post-exploitation modules
+- [x] Phase 6: Advanced C2 features
 
 ## Exit Criteria
 

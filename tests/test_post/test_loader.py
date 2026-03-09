@@ -42,10 +42,17 @@ class TestPostLoaderList:
         assert modules["enum/privesc"]["implemented"] is True
         assert modules["enum/users"]["implemented"] is True
         assert modules["enum/network"]["implemented"] is True
-        # Stubs are not implemented
-        assert modules["cred/browser"]["implemented"] is False
-        assert modules["lateral/pth"]["implemented"] is False
-        assert modules["persist/cron"]["implemented"] is False
+        # Post-exploitation modules are now implemented
+        assert modules["cred/browser"]["implemented"] is True
+        assert modules["cred/keychain"]["implemented"] is True
+        assert modules["cred/memory"]["implemented"] is True
+        assert modules["lateral/pth"]["implemented"] is True
+        assert modules["lateral/ssh"]["implemented"] is True
+        assert modules["persist/cron"]["implemented"] is True
+        assert modules["persist/launchagent"]["implemented"] is True
+        # Windows stubs remain not implemented
+        assert modules["lateral/wmi"]["implemented"] is False
+        assert modules["persist/registry"]["implemented"] is False
 
 
 class TestPostLoaderDispatch:
@@ -54,14 +61,10 @@ class TestPostLoaderDispatch:
         assert result["ok"] is False
         assert "not found" in result["error"].lower()
 
-    def test_dispatch_stub_returns_not_implemented(self):
-        for stub in ("cred/browser", "cred/keychain", "cred/memory",
-                     "lateral/pth", "lateral/ssh", "lateral/wmi",
-                     "persist/cron", "persist/registry", "persist/launchagent"):
+    def test_dispatch_windows_stubs_return_not_implemented(self):
+        for stub in ("lateral/wmi", "persist/registry"):
             result = PostLoader().dispatch(stub)
             assert result["ok"] is False, f"{stub} should return ok=False"
-            assert "not" in result["error"].lower() or "implement" in result["error"].lower(), \
-                f"{stub} error message unexpected: {result['error']}"
 
     def test_dispatch_returns_dict(self):
         result = PostLoader().dispatch("nonexistent")

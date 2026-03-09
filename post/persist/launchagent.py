@@ -154,19 +154,190 @@ ARGS EXPECTED BY THIS MODULE
   }
 """
 
+import os
+import platform
+import plistlib
+import subprocess
+from pathlib import Path
+
 from post.base import ModuleResult, PostModule
 from post.loader import register
 
+_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
+
+
+def _plist_path(label: str) -> Path:
+    return _AGENTS_DIR / f"{label}.plist"
+
+
+def _install(label: str, program: str | list, run_at_load: bool = True,
+             keep_alive: bool = False, interval: int = 0) -> dict:
+    """Write a LaunchAgent plist and load it."""
+    _AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    plist_path = _plist_path(label)
+
+    plist: dict = {
+        "Label":            label,
+        "RunAtLoad":        run_at_load,
+        "KeepAlive":        keep_alive,
+    }
+
+    if isinstance(program, list):
+        plist["ProgramArguments"] = program
+    else:
+        plist["ProgramArguments"] = ["/bin/sh", "-c", program]
+
+    if interval > 0:
+        plist["StartInterval"] = interval
+
+    plist["StandardOutPath"] = str(Path.home() / "Library" / "Logs" / f"{label}.log")
+    plist["StandardErrorPath"] = str(Path.home() / "Library" / "Logs" / f"{label}.err")
+
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist, f)
+
+    # Load using launchctl bootstrap (macOS 10.11+)
+    uid = os.getuid()
+    r = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)],
+        capture_output=True, text=True,
+    )
+    loaded = r.returncode == 0
+    if not loaded:
+        # Fallback for older macOS
+        r2 = subprocess.run(
+            ["launchctl", "load", "-w", str(plist_path)],
+            capture_output=True, text=True,
+        )
+        loaded = r2.returncode == 0
+
+    return {"plist": str(plist_path), "loaded": loaded, "output": (r.stdout + r.stderr).strip()}
+
+
+def _remove(label: str) -> dict:
+    """Unload and delete a LaunchAgent plist."""
+    plist_path = _plist_path(label)
+    uid = os.getuid()
+
+    # bootout (preferred) then fallback to unload
+    r = subprocess.run(
+        ["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        subprocess.run(["launchctl", "remove", label], capture_output=True)
+
+    try:
+        plist_path.unlink()
+        file_removed = True
+    except FileNotFoundError:
+        file_removed = False
+
+    return {"label": label, "file_removed": file_removed}
+
+
+def _list_agents() -> list[dict]:
+    """List all LaunchAgents in ~/Library/LaunchAgents/."""
+    if not _AGENTS_DIR.exists():
+        return []
+    agents = []
+    for p in _AGENTS_DIR.glob("*.plist"):
+        try:
+            with open(p, "rb") as f:
+                data = plistlib.load(f)
+            agents.append({
+                "label":       data.get("Label", p.stem),
+                "path":        str(p),
+                "run_at_load": data.get("RunAtLoad", False),
+                "keep_alive":  data.get("KeepAlive", False),
+                "program":     data.get("ProgramArguments", data.get("Program", "")),
+            })
+        except Exception:
+            agents.append({"path": str(p), "error": "unreadable"})
+
+    # Check which are currently running
+    r = subprocess.run(["launchctl", "list"], capture_output=True, text=True)
+    running_labels = {line.split()[2] for line in r.stdout.splitlines()[1:]
+                      if len(line.split()) >= 3} if r.returncode == 0 else set()
+    for a in agents:
+        a["running"] = a.get("label", "") in running_labels
+
+    return agents
+
+
+# ── Module ─────────────────────────────────────────────────────────────────────
 
 @register
 class LaunchAgentPersistModule(PostModule):
-    NAME = "persist/launchagent"
-    DESCRIPTION = "STUB — macOS LaunchAgent / LaunchDaemon persistence via plist"
-    PLATFORM = ["darwin"]
-    IMPLEMENTED = False
+    NAME        = "persist/launchagent"
+    DESCRIPTION = "macOS LaunchAgent persistence: install/remove/list plists in ~/Library/LaunchAgents/"
+    PLATFORM    = ["darwin"]
+    IMPLEMENTED = True
 
     def run(self, args: dict | None = None) -> ModuleResult:
-        raise NotImplementedError(
-            "See post/persist/launchagent.py docstring: plistlib.dump() to "
-            "~/Library/LaunchAgents/{label}.plist, then launchctl load."
-        )
+        """
+        Args:
+            action       (str): "install" | "remove" | "list"
+
+            For install:
+              label       (str): Reverse-DNS label, e.g. "com.apple.system-update"
+              program     (str|list): Command string or argv list
+              run_at_load (bool): Run immediately when loaded (default True)
+              keep_alive  (bool): Restart if it exits (default False)
+              interval    (int): StartInterval in seconds (0 = disabled)
+
+            For remove:
+              label (str): Label of the agent to remove
+        """
+        if platform.system() != "Darwin":
+            return ModuleResult(ok=False, output="",
+                                error="LaunchAgents are macOS-only (use cron on Linux)")
+
+        args = args or {}
+        action = args.get("action", "list")
+
+        if action == "list":
+            agents = _list_agents()
+            lines = [f"LaunchAgents in ~/Library/LaunchAgents/: {len(agents)}", ""]
+            for a in agents:
+                status = "running" if a.get("running") else "stopped"
+                lines.append(f"  [{status}] {a.get('label', a.get('path', '?'))}")
+                prog = a.get("program", "")
+                if prog:
+                    prog_str = " ".join(prog) if isinstance(prog, list) else prog
+                    lines.append(f"             {prog_str[:80]}")
+            return ModuleResult(ok=True, output="\n".join(lines), data={"agents": agents})
+
+        if action == "install":
+            label   = args.get("label", "")
+            program = args.get("program", "")
+            if not label or not program:
+                return ModuleResult(ok=False, output="",
+                                    error="Required: label, program")
+            result = _install(
+                label=label,
+                program=program,
+                run_at_load=args.get("run_at_load", True),
+                keep_alive=args.get("keep_alive", False),
+                interval=int(args.get("interval", 0)),
+            )
+            lines = [
+                f"LaunchAgent installed: {label}",
+                f"  Plist:  {result['plist']}",
+                f"  Loaded: {result['loaded']}",
+            ]
+            if result.get("output"):
+                lines.append(f"  Output: {result['output']}")
+            return ModuleResult(ok=result["loaded"], output="\n".join(lines), data=result)
+
+        if action == "remove":
+            label = args.get("label", "")
+            if not label:
+                return ModuleResult(ok=False, output="", error="Required: label")
+            result = _remove(label)
+            return ModuleResult(ok=True,
+                                output=f"LaunchAgent '{label}' removed (file: {result['file_removed']})",
+                                data=result)
+
+        return ModuleResult(ok=False, output="",
+                            error=f"Unknown action '{action}'. Use: install|remove|list")

