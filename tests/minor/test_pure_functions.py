@@ -1,12 +1,11 @@
 """Tests for Ursa Minor pure utility functions (no network I/O)."""
 
-import pytest
 from ursa_minor.server import (
     _calculate_cidr,
     _lookup_vendor,
-    lookup_service,
-    identify_hash,
     generate_reverse_shell,
+    identify_hash,
+    lookup_service,
 )
 
 

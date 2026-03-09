@@ -6,12 +6,11 @@ AES-256-CBC encryption for C2 communications.
 Each session gets a unique key negotiated at registration.
 """
 
-import os
+import base64
 import hashlib
 import hmac
-import base64
 import json
-import struct
+import os
 
 
 class UrsaCrypto:
@@ -46,7 +45,7 @@ class UrsaCrypto:
         return data[:-pad_len]
 
     def _xor_bytes(self, a: bytes, b: bytes) -> bytes:
-        return bytes(x ^ y for x, y in zip(a, b))
+        return bytes(x ^ y for x, y in zip(a, b, strict=False))
 
     def _aes_encrypt_block(self, block: bytes) -> bytes:
         """AES-256 single block encryption (pure Python).

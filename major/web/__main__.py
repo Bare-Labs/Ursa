@@ -5,6 +5,7 @@ Usage:
 """
 
 import argparse
+
 import uvicorn
 
 from major.config import get_config, reload_config
@@ -28,7 +29,7 @@ def main():
     host = args.host or cfg.get("major.web.host", "0.0.0.0")
     port = args.port or cfg.get("major.web.port", 8080)
 
-    print(f"  URSA MAJOR — Web UI")
+    print("  URSA MAJOR — Web UI")
     print(f"  http://{host}:{port}")
     print()
 

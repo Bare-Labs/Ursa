@@ -1,12 +1,11 @@
 """Tests for the Ursa Major C2 HTTP server."""
 
-import json
 import base64
-import urllib.request
+import json
 import urllib.error
+import urllib.request
 
-import pytest
-from major.db import create_task, get_task, get_session
+from major.db import create_task, get_session, get_task
 
 
 def _post(host, port, path, data):

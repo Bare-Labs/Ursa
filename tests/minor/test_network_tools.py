@@ -1,9 +1,9 @@
 """Tests for Ursa Minor network tools (mocked I/O)."""
 
-import socket
+
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch, MagicMock
 
 
 @pytest.mark.network

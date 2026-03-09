@@ -1,8 +1,9 @@
 """File routes — browse and download exfiltrated files."""
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from major.db import list_files, get_file
+
+from major.db import get_file, list_files
 from major.web.app import templates
 
 router = APIRouter(prefix="/files")

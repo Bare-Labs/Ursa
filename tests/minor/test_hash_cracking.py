@@ -2,7 +2,6 @@
 
 import hashlib
 
-import pytest
 from ursa_minor.server import crack_hash
 
 

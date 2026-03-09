@@ -1,7 +1,8 @@
 """Tests for UrsaCrypto encryption layer."""
 
 import pytest
-from major.crypto import UrsaCrypto, generate_session_key, derive_key
+
+from major.crypto import UrsaCrypto, derive_key, generate_session_key
 
 
 class TestEncryptDecryptRoundTrip:

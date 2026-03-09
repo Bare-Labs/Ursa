@@ -2,10 +2,10 @@
 
 import asyncio
 import json
-import time
 
 from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
+
 from major.db import get_events, list_sessions
 
 router = APIRouter()
