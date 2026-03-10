@@ -1,10 +1,56 @@
 # Ursa
 
-An AI-native red team penetration testing toolkit by [Bare Labs](https://github.com/BareLabs).
+<div align="center">
 
-Ursa is built around two components — **Ursa Major** (command & control) and **Ursa Minor** (reconnaissance) — each exposing an [MCP](https://modelcontextprotocol.io/) server so AI agents like Claude can operate them conversationally alongside human operators.
+**AI-native red team operations platform**
 
-```
+Command & control, autonomous recon, implant generation, governance, and operator UX — all designed for human + AI collaboration through MCP.
+
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](#quick-start)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/protocol-MCP-7b61ff.svg)](https://modelcontextprotocol.io/)
+
+</div>
+
+---
+
+## Table of Contents
+
+- [Why Ursa](#why-ursa)
+- [Platform Architecture](#platform-architecture)
+- [Core Components](#core-components)
+- [What You Can Do with Ursa](#what-you-can-do-with-ursa)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [MCP Setup (Claude Code / Desktop)](#mcp-setup-claude-code--desktop)
+- [Ursa Major (C2)](#ursa-major-c2)
+- [Ursa Minor (Recon)](#ursa-minor-recon)
+- [Implants & Payloads](#implants--payloads)
+- [Governance, Audit, and Campaign Ops](#governance-audit-and-campaign-ops)
+- [Project Structure](#project-structure)
+- [Roadmap and Planning](#roadmap-and-planning)
+- [Security & Legal](#security--legal)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
+## Why Ursa
+
+Ursa is a modern red-team toolkit built for the way operators actually work today:
+
+- **AI-operable by design** through MCP servers for both C2 and recon.
+- **Operator-centric workflows** with campaign context, approvals, and shift handoff support.
+- **Practical tradecraft coverage** across discovery, access support, execution, collection, and post-exploitation modules.
+- **High leverage for small teams** by combining automation and human oversight.
+
+If you want a single project that can be driven conversationally by an AI assistant *without* losing governance and operator control, this is what Ursa is for.
+
+---
+
+## Platform Architecture
+
+```text
                         ┌─────────────────────────────┐
                         │         AI Agent             │
                         │  (Claude Code / Desktop)     │
@@ -29,22 +75,46 @@ Ursa is built around two components — **Ursa Major** (command & control) and *
                 └───────────────┘
 ```
 
-## Components
+---
 
-| Component | Description | Docs |
-|-----------|-------------|------|
-| **[Ursa Major](major/)** | C2 server — sessions, tasking, file transfer, encrypted comms, governance, web UI, traffic profiles, TLS, and 60+ MCP tools | [major/README.md](major/README.md) |
-| **[Ursa Minor](minor/)** | Recon toolkit — 16 network reconnaissance and vulnerability scanning tools | [minor/README.md](minor/README.md) |
-| **[Implants](implants/)** | HTTP beacons (Python + Go + Zig), stager, evasion, and payload builder | [implants/README.md](implants/README.md) |
-| **[Post modules](post/)** | Post-exploitation: enumeration, credential harvesting, lateral movement, persistence | — |
+## Core Components
+
+| Component | Purpose | Docs |
+|-----------|---------|------|
+| **[Ursa Major](major/)** | Command & control: sessions, tasking, encrypted comms, web UI, governance, and campaign ops | [major/README.md](major/README.md) |
+| **[Ursa Minor](minor/)** | Recon/scanning suite with 16 tools (network, web, creds, SMB/SNMP, hash tooling) | [minor/README.md](minor/README.md) |
+| **[Implants](implants/)** | Beacon templates (Python/Go/Zig), stager, evasion helpers, payload builder | [implants/README.md](implants/README.md) |
+| **[Post modules](post/)** | Post-exploitation modules (enum, creds, lateral movement, persistence) | — |
+
+---
+
+## What You Can Do with Ursa
+
+### Operate C2 with governance, not chaos
+- Manage implant sessions, queue tasks, collect results, and move files.
+- Enforce **step-up approvals** for risky actions.
+- Preserve an **immutable audit chain** and signed approval decisions.
+
+### Run autonomous and assisted reconnaissance
+- Discover hosts, scan ports/services, fingerprint OS, test web exposures, and enumerate protocols/services.
+- Use tooling from MCP, CLI, or standalone scripts.
+
+### Generate and stage payloads quickly
+- Build configured payloads for multiple implant templates.
+- Use stagers and tokenized builder workflows for rapid iteration.
+
+### Keep operations organized
+- Group by campaigns/tags, maintain notes/checklists, and export handoff/report artifacts.
+
+---
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- `sudo` access (required for raw network operations in Ursa Minor)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Claude Desktop](https://claude.ai/download) (for MCP integration)
+- Python **3.11+**
+- `sudo` access (required for several raw-socket recon operations in Ursa Minor)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Claude Desktop](https://claude.ai/download) for MCP integration
 
 ### Setup
 
@@ -56,53 +126,55 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Install Ursa Minor as a package (optional, for CLI usage)
+# Optional: install Ursa Minor as a package for CLI usage
 pip install ./minor
 ```
 
-### Configuration (optional)
-
-Copy and edit `ursa.yaml` to customize server settings, enable TLS, configure traffic profiles, set up the redirector, or tune auto-recon:
+### Start services
 
 ```bash
-cp ursa.example.yaml ursa.yaml   # if present, otherwise create from scratch
+# Start C2 (default 0.0.0.0:8443)
+python3 major/server.py
+
+# Start web UI (default 0.0.0.0:8080)
+python3 -m major.web
 ```
 
-Key settings:
+Default UI credentials (change before any non-local deployment):
+- Username: `admin`
+- Password: `change-me-now`
+
+---
+
+## Configuration
+
+Create a local config file at the project root:
+
+```bash
+cp ursa.yaml.example ursa.yaml
+```
+
+Example:
+
 ```yaml
 major:
   port: 8443
   traffic_profile: default        # default | jquery | office365 | github-api
   tls:
-    enabled: false                # set true to enable HTTPS
+    enabled: false
   auto_recon:
-    enabled: true                 # queue recon modules on first beacon check-in
+    enabled: true
   governance:
     require_step_up_approval: true
 ```
 
-### MCP Configuration
+---
 
-To use Ursa with Claude, add both MCP servers to your configuration.
+## MCP Setup (Claude Code / Desktop)
 
-**Claude Code** (`~/.claude/settings.json` or project `.mcp.json`):
+Add both MCP servers to your Claude config.
 
-```json
-{
-  "mcpServers": {
-    "Ursa-Major": {
-      "command": "/path/to/Ursa/venv/bin/python3",
-      "args": ["/path/to/Ursa/server.py"]
-    },
-    "Ursa-Minor": {
-      "command": "sudo",
-      "args": ["/path/to/Ursa/venv/bin/python3", "/path/to/Ursa/minor/server.py"]
-    }
-  }
-}
-```
-
-**Claude Desktop** (`claude_desktop_config.json`):
+### Claude Code (`~/.claude/settings.json` or project `.mcp.json`)
 
 ```json
 {
@@ -119,95 +191,140 @@ To use Ursa with Claude, add both MCP servers to your configuration.
 }
 ```
 
-> Replace `/path/to/Ursa` with the actual path to your cloned repo.
+### Claude Desktop (`claude_desktop_config.json`)
 
-> Ursa Minor requires `sudo` because tools like ARP scanning and packet sniffing need raw socket access.
-
-### Web UI
-
-Ursa Major includes a browser-based operator dashboard. Start it alongside the C2:
-
-```bash
-python3 -m major.web         # Default: http://0.0.0.0:8080
+```json
+{
+  "mcpServers": {
+    "Ursa-Major": {
+      "command": "/path/to/Ursa/venv/bin/python3",
+      "args": ["/path/to/Ursa/server.py"]
+    },
+    "Ursa-Minor": {
+      "command": "sudo",
+      "args": ["/path/to/Ursa/venv/bin/python3", "/path/to/Ursa/minor/server.py"]
+    }
+  }
+}
 ```
 
-Default credentials (change before any non-local deployment):
-- Username: `admin`  Password: `change-me-now`
+> Replace `/path/to/Ursa` with your local clone path.
 
-### Standalone C2
+---
 
-```bash
-python3 major/server.py                    # Default: 0.0.0.0:8443
-python3 major/server.py --port 9000
-python3 major/server.py --tls              # Enable HTTPS (auto-generates cert)
-```
+## Ursa Major (C2)
 
-## What's Built
+Ursa Major is an HTTP-based C2 server with:
 
-### Ursa Major — C2
-- **Session management** — implant registration, check-in, status tracking (active/stale/dead)
-- **Task queuing** — 13 task types: shell, sysinfo, ps, whoami, pwd, cd, ls, env, download, upload, sleep, kill, post
-- **Encrypted comms** — per-session AES-256-CTR + HMAC-SHA256; keys negotiated at registration
-- **File transfer** — exfiltration (upload from target) and delivery (download to target)
-- **Traffic profiles** — 4 built-in malleable C2 profiles: `default`, `jquery`, `office365`, `github-api`
-- **TLS/HTTPS** — optional; auto-generates self-signed cert with SAN, or supply your own
-- **HTTP redirector** — transparent forwarding proxy with path/user-agent filtering and decoy responses
-- **YAML configuration** — full config file system with profile overrides and sane defaults
-- **Auto-recon** — configurable post-module queue on first beacon check-in
-- **Operator situational awareness** — `ursa_sitrep` morning briefing, `ursa_session_recon` per-session findings view
-- **Loot alerting** — automatic `CRITICAL`/`HIGH` finding events when loot modules complete
-- **Session auto-tagging** — OS, arch, privilege, and cloud-cred tags applied from sysinfo results
+- Session lifecycle tracking (active/stale/dead)
+- 13 core task types (`shell`, `sysinfo`, `download`, `upload`, `sleep`, `kill`, `post`, etc.)
+- Per-session encrypted communications (AES-256-CTR + HMAC-SHA256)
+- Optional TLS and traffic profiles
+- Operator web UI with role-based access (`operator`, `reviewer`, `admin`)
+- 60+ MCP tools for operations, governance, and campaign workflows
 
-### Governance & Audit
-- **Step-up approvals** — high/critical-risk actions require explicit approval before queuing
-- **Immutable audit chain** — HMAC-chained audit records with integrity verification
-- **HMAC-signed decisions** — approval/rejection decisions are cryptographically signed
-- **Policy matrix** — configurable risk tiers per task/action type
-- **Campaign threshold alerts** — configurable limits on pending approval counts and age
+For full API/tooling details: **[major/README.md](major/README.md)**
 
-### Campaign Management
-- **Campaigns & tagging** — group sessions by operation; filter all tools by campaign/tag
-- **Checklists & playbooks** — per-campaign operator checklists with due dates and owners; reusable playbook library
-- **Timeline** — unified event/task/approval timeline per campaign
-- **Notes** — operator notes attached to campaigns
-- **Handoff reports** — briefing generator for shift/team handoffs (Markdown + JSON export)
+---
 
-### Web UI
-- Session list, task history, file browser, event log
-- Campaign dashboard, governance approvals, policy management
-- Real-time updates via SSE
-- Role-based access: `operator`, `reviewer`, `admin`
+## Ursa Minor (Recon)
 
-### Implants & Payloads
-- **Python beacon** — full-featured, jitter sleep, UA rotation, sandbox/debugger detection, AMSI bypass
-- **Go beacon** — compiled, cross-platform (linux/windows/darwin), no runtime dependencies
-- **Zig template** — skeleton for Zig compilation target
-- **Payload builder** — language-agnostic token substitution; post-build compile step for Go/Zig/C/etc.
-- **Stager** — minimal first-stage dropper; downloads and executes beacon from `/stage`
-- **Evasion** — sandbox/VM detection (14 checks), debugger detection, analysis tool detection, obfuscated sleep, process name spoofing
+Ursa Minor includes 16 reconnaissance and scanning tools, including:
 
-### Post-Exploitation (21 modules)
-- **Enumeration** — sysinfo, users, privilege escalation checks, network config, loot
-- **Credentials** — memory dumping, browser credentials, keychain/credential store harvesting, loot aggregation
-- **Lateral movement** — WMI exec, SSH pivoting, pass-the-hash
-- **Persistence** — registry run keys, cron jobs, launch agents/daemons
-
-### Ursa Minor — Recon (16 tools)
-- Network discovery, port scanning, packet capture, full recon
-- Subdomain enumeration (CT logs + DNS brute-force)
-- Web directory busting, vulnerability scanning (SQLi, XSS, CMDi, LFI, headers)
-- Credential spraying (SSH, FTP, HTTP Basic Auth)
+- Network discovery and port/service scanning
+- Packet capture and full recon orchestration
+- Subdomain enumeration, directory busting, vulnerability scanning
+- Credential spraying (SSH/FTP/HTTP Basic)
 - OS fingerprinting, SMB enumeration, SNMP scanning
-- Hash cracking/identification, reverse shell generation
+- Hash cracking/identification and reverse shell payload generation
 
-### Infrastructure
-- **842+ tests** — pytest suite covering all major components
-- **GitHub Actions CI** — ruff lint, mypy type check, pytest on every push/PR
+Use via MCP, package CLI, or standalone scripts.
 
-## Disclaimer
+For full details: **[minor/README.md](minor/README.md)**
 
-Ursa is intended for **authorized security testing, red team engagements, CTF competitions, and security research only**. Always obtain proper authorization before testing systems you do not own. Unauthorized access to computer systems is illegal.
+---
+
+## Implants & Payloads
+
+The implants subsystem provides:
+
+- **Python beacon** (full-featured)
+- **Go beacon template** (cross-platform compilation support)
+- **Zig beacon template** (skeleton)
+- **Stager** for initial retrieval/exec flow
+- **Builder** for tokenized payload generation and optional post-build steps
+- **Evasion primitives** (sandbox/debugger checks, obfuscated sleep, process-name spoofing)
+
+For implementation and usage details: **[implants/README.md](implants/README.md)**
+
+---
+
+## Governance, Audit, and Campaign Ops
+
+Ursa goes beyond task execution by including operational safeguards:
+
+- **Step-up approval workflow** for high-risk operations
+- **Policy matrix and threshold alerts**
+- **Cryptographically chained audit records**
+- **Campaign-level grouping, notes, timelines, and handoff reports**
+
+This makes Ursa suitable for structured team operations where traceability matters.
+
+---
+
+## Project Structure
+
+```text
+Ursa/
+├── major/             # C2 server, governance, web UI logic
+├── minor/             # Recon/scanning toolkit
+├── implants/          # Beacon templates, stager, evasion, builder
+├── post/              # Post-exploitation modules
+├── tests/             # Test suite
+├── server.py          # MCP server entry point (Ursa Major)
+├── PLAN.md            # Short-term implementation plan
+├── ROADMAP.md         # Long-term feature roadmap
+└── README.md
+```
+
+---
+
+## Roadmap and Planning
+
+- Near-term execution details: **[PLAN.md](PLAN.md)**
+- Broader direction and milestones: **[ROADMAP.md](ROADMAP.md)**
+
+---
+
+## Security & Legal
+
+Ursa is intended for:
+
+- Authorized security testing
+- Red team engagements
+- CTF competitions
+- Security research
+
+Do **not** use this project on systems you do not own or have explicit permission to test.
+
+---
+
+## Contributing
+
+Contributions are welcome. Good starting points:
+
+- Documentation polish and examples
+- Tests and edge-case hardening
+- Tool quality and false-positive reduction
+- UX improvements for operator workflows and reporting
+
+If you open a PR, include:
+- Clear scope and rationale
+- Reproduction/testing notes
+- Any security implications
+
+---
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the [MIT License](LICENSE).
