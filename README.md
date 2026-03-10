@@ -7,7 +7,7 @@
 Command & control, autonomous recon, implant generation, governance, and operator UX — all designed for human + AI collaboration through MCP.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](#quick-start)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License: Apache](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/protocol-MCP-7b61ff.svg)](https://modelcontextprotocol.io/)
 
 </div>
@@ -327,4 +327,4 @@ If you open a PR, include:
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [Apache 2.0 License](LICENSE).
