@@ -82,6 +82,139 @@ _AUTO_RECON_DEFAULT_MODULES: list = list(
 )
 
 
+_LOOT_MODULES   = {"enum/loot", "cred/loot"}
+_ALERT_SEVERITIES = {"CRITICAL", "HIGH"}
+_SEVERITY_LOG_LEVEL = {"CRITICAL": "warning", "HIGH": "info"}
+
+# Arch normalisation
+_ARCH_MAP = {
+    "x86_64": "x64", "amd64": "x64",
+    "i386": "x86", "i486": "x86", "i586": "x86", "i686": "x86",
+    "aarch64": "arm64", "arm64": "arm64",
+    "armv7l": "arm", "armv6l": "arm",
+}
+
+
+def _parse_result_data(result_str: str) -> dict:
+    """Extract the structured data dict from a beacon post-task result string."""
+    sentinel = "\n\n--- data ---\n"
+    if sentinel in result_str:
+        _, data_json = result_str.split(sentinel, 1)
+        try:
+            return json.loads(data_json)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
+def _fire_loot_alerts(session_id: str, module: str, result_str: str) -> None:
+    """Log warning/info events for CRITICAL and HIGH loot findings.
+
+    Called from _handle_result() whenever a completed post task is a
+    loot module.  Surfaces critical hits in ursa_events + ursa_sitrep
+    without any operator action.
+    """
+    if module not in _LOOT_MODULES:
+        return
+    data = _parse_result_data(result_str)
+    findings = data.get("findings", [])
+    alerted = 0
+    for f in findings:
+        sev = (f.get("severity") or "").upper()
+        if sev not in _ALERT_SEVERITIES:
+            continue
+        title  = f.get("title", "unknown finding")
+        cat    = f.get("category", "")
+        detail = f.get("detail", "")
+        level  = _SEVERITY_LOG_LEVEL.get(sev, "info")
+        msg    = f"[{sev}] {module} → {title}"
+        if detail:
+            msg += f" | {detail[:120]}"
+        log_event(level, "recon", msg, session_id=session_id)
+        alerted += 1
+    if alerted:
+        _log(f"    [recon-alert] {alerted} finding(s) logged for session {session_id}")
+
+
+def _apply_sysinfo_autotag(session_id: str, module: str, result_str: str) -> None:
+    """Parse enum/sysinfo result and update session OS/arch/tags.
+
+    Adds OS and arch tags (linux, darwin, windows, x64, arm64, …),
+    a 'root' tag if the implant runs as root/SYSTEM, and a 'container'
+    tag when running inside Docker/LXC/container.
+    """
+    if module != "enum/sysinfo":
+        return
+    data = _parse_result_data(result_str)
+    if not data:
+        return
+
+    session = get_session(session_id)
+    if not session:
+        return
+
+    updates: dict = {}
+    new_tags: list[str] = []
+
+    # ── OS ───────────────────────────────────────────────────────────────────
+    os_name    = (data.get("os")         or "").strip()
+    os_release = (data.get("os_release") or "").strip()
+    os_lower   = os_name.lower()
+
+    if os_name:
+        updates["os"] = f"{os_name} {os_release}".strip()
+        if "linux" in os_lower:
+            new_tags.append("linux")
+        elif "darwin" in os_lower:
+            new_tags.append("darwin")
+        elif "windows" in os_lower:
+            new_tags.append("windows")
+
+    # ── Arch ─────────────────────────────────────────────────────────────────
+    machine = (data.get("machine") or "").strip().lower()
+    if machine:
+        updates["arch"] = machine
+        arch_tag = _ARCH_MAP.get(machine)
+        if arch_tag:
+            new_tags.append(arch_tag)
+
+    # ── Hostname (if more precise than what beacon reported) ─────────────────
+    hostname = (data.get("hostname") or "").strip()
+    if hostname and hostname != "unknown":
+        updates["hostname"] = hostname
+
+    # ── Privilege (root / SYSTEM / admin) ────────────────────────────────────
+    env = data.get("env") or {}
+    user = (env.get("USER") or env.get("LOGNAME") or env.get("USERNAME") or "").strip()
+    if user.lower() in ("root",):
+        new_tags.append("root")
+    elif user.lower() in ("system",):
+        new_tags.append("system")
+    elif user.lower() == "administrator":
+        new_tags.append("admin")
+
+    # ── Cloud credentials in env ──────────────────────────────────────────────
+    if env.get("AWS_ACCESS_KEY_ID"):
+        new_tags.append("aws-creds")
+    if env.get("KUBECONFIG"):
+        new_tags.append("k8s")
+
+    # ── Container / VM ────────────────────────────────────────────────────────
+    hints = data.get("container_vm_hints") or []
+    if hints:
+        new_tags.append("container")
+
+    # ── Merge tags (preserve existing, deduplicate) ───────────────────────────
+    if new_tags:
+        existing = [t.strip() for t in (session.get("tags") or "").split(",") if t.strip()]
+        merged   = existing + [t for t in new_tags if t not in existing]
+        updates["tags"] = ",".join(merged)
+
+    if updates:
+        update_session_info(session_id, **updates)
+        _log(f"    [autotag] Session {session_id} updated: {list(updates.keys())}")
+
+
 def _auto_recon_enabled() -> bool:
     """Check if auto-recon is enabled, preferring DB runtime override."""
     val = get_setting("auto_recon.enabled")
@@ -380,6 +513,13 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
         if task:
             status = "ERROR" if error_data else "OK"
             _log(f"    [{status}] Task {task_id} ({task['task_type']}) — session {session_id}")
+
+            # Post-task hooks (only for successfully completed post tasks)
+            if task.get("task_type") == "post" and not error_data:
+                args = json.loads(task["args"]) if isinstance(task["args"], str) else (task["args"] or {})
+                module = args.get("module", "")
+                _fire_loot_alerts(session_id, module, result_data)
+                _apply_sysinfo_autotag(session_id, module, result_data)
 
         self._send_json({"status": "ok"})
 

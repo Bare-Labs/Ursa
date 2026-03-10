@@ -701,3 +701,394 @@ class TestGoTemplate:
             f"cross-compile failed:\n{result.stdout}\n{result.stderr}"
         )
         assert (tmp_path / "agent-linux").exists()
+
+
+# ── Go cross-compile — additional targets ─────────────────────────────────────
+
+
+class TestGoTemplateCrossCompile:
+    """Additional cross-compilation targets for the http_go.go template."""
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        if "http_go" not in Builder().list_templates():
+            pytest.skip("http_go template not present")
+
+    @pytest.mark.skipif(
+        __import__("shutil").which("go") is None,
+        reason="Go compiler not installed",
+    )
+    def test_cross_compiles_windows_amd64(self, tmp_path):
+        """Cross-compile for Windows/amd64."""
+        import os
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src_path = Builder().build_to_file(cfg, tmp_path / "agent.go")
+        env = {**os.environ, "GOOS": "windows", "GOARCH": "amd64"}
+        result = subprocess.run(
+            ["go", "build", "-o", str(tmp_path / "agent.exe"), str(src_path)],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, (
+            f"Windows/amd64 cross-compile failed:\n{result.stdout}\n{result.stderr}"
+        )
+        assert (tmp_path / "agent.exe").exists()
+
+    @pytest.mark.skipif(
+        __import__("shutil").which("go") is None,
+        reason="Go compiler not installed",
+    )
+    def test_cross_compiles_darwin_arm64(self, tmp_path):
+        """Cross-compile for macOS/arm64."""
+        import os
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        src_path = Builder().build_to_file(cfg, tmp_path / "agent.go")
+        env = {**os.environ, "GOOS": "darwin", "GOARCH": "arm64"}
+        result = subprocess.run(
+            ["go", "build", "-o", str(tmp_path / "agent-darwin"), str(src_path)],
+            capture_output=True, text=True, env=env,
+        )
+        assert result.returncode == 0, (
+            f"darwin/arm64 cross-compile failed:\n{result.stdout}\n{result.stderr}"
+        )
+        assert (tmp_path / "agent-darwin").exists()
+
+    @pytest.mark.skipif(
+        __import__("shutil").which("go") is None,
+        reason="Go compiler not installed",
+    )
+    def test_build_and_compile_via_builder_api(self, tmp_path):
+        """Use Builder.build_and_compile() end-to-end with go build."""
+        cfg = PayloadConfig(
+            c2_url="http://127.0.0.1:8443",
+            template="http_go",
+            post_build="go build -o {binary} {output}",
+        )
+        src_path, binary_path = Builder().build_and_compile(cfg, tmp_path / "agent.go")
+        assert src_path.exists()
+        assert binary_path is not None
+        assert binary_path.exists()
+
+
+# ── template_path edge cases ──────────────────────────────────────────────────
+
+
+class TestTemplatePath:
+
+    def test_returns_matching_path(self, tmp_templates):
+        b = Builder(templates_dir=tmp_templates)
+        p = b.template_path("basic")
+        assert p.name == "basic.py"
+
+    def test_error_message_includes_stem(self, tmp_templates):
+        b = Builder(templates_dir=tmp_templates)
+        with pytest.raises(FileNotFoundError, match="ghost"):
+            b.template_path("ghost")
+
+    def test_error_message_lists_available(self, tmp_templates):
+        """The error for a missing template names the available ones."""
+        b = Builder(templates_dir=tmp_templates)
+        with pytest.raises(FileNotFoundError, match="basic"):
+            b.template_path("nonexistent")
+
+    def test_missing_templates_dir_raises(self, tmp_path):
+        b = Builder(templates_dir=tmp_path / "missing")
+        with pytest.raises(FileNotFoundError, match="Templates directory"):
+            b.template_path("anything")
+
+    def test_stem_conflict_returns_first_by_extension(self, tmp_path):
+        """When two files share a stem, the one first alphabetically by ext wins."""
+        tdir = tmp_path / "templates"
+        tdir.mkdir()
+        (tdir / "agent.go").write_text("// go\n")   # .go < .zig
+        (tdir / "agent.zig").write_text("// zig\n")
+        b = Builder(templates_dir=tdir)
+        assert b.template_path("agent").suffix == ".go"
+
+
+# ── list_templates edge cases ─────────────────────────────────────────────────
+
+
+class TestListTemplatesEdgeCases:
+
+    def test_ignores_files_without_extensions(self, tmp_templates):
+        (tmp_templates / "README").write_text("no extension")
+        b = Builder(templates_dir=tmp_templates)
+        assert "README" not in b.list_templates()
+
+    def test_ignores_hidden_dotfiles(self, tmp_templates):
+        (tmp_templates / ".gitkeep").write_text("")
+        names = Builder(templates_dir=tmp_templates).list_templates()
+        assert ".gitkeep" not in names
+        assert "" not in names
+
+    def test_deduplicates_stem_conflict(self, tmp_templates):
+        (tmp_templates / "basic.zig").write_text("// zig duplicate\n")
+        names = Builder(templates_dir=tmp_templates).list_templates()
+        assert names.count("basic") == 1
+
+
+# ── detect_local_ip fallback ──────────────────────────────────────────────────
+
+
+class TestDetectLocalIPFallback:
+
+    def test_returns_loopback_when_socket_constructor_fails(self):
+        with patch("implants.builder.socket.socket") as mock_cls:
+            mock_cls.side_effect = OSError("no network")
+            assert detect_local_ip() == "127.0.0.1"
+
+    def test_returns_loopback_when_connect_fails(self):
+        with patch("implants.builder.socket.socket") as mock_cls:
+            mock_inst = mock_cls.return_value
+            mock_inst.connect.side_effect = OSError("unreachable")
+            assert detect_local_ip() == "127.0.0.1"
+
+
+# ── Builder.write edge cases ──────────────────────────────────────────────────
+
+
+class TestWriteEdgeCases:
+
+    def test_overwrites_existing_file(self, tmp_path):
+        out = tmp_path / "payload.py"
+        out.write_text("old content\n")
+        Builder().write("new content\n", out)
+        assert out.read_text() == "new content\n"
+
+
+# ── Zig template structural content ──────────────────────────────────────────
+
+
+class TestRealZigTemplateStructure:
+    """Structural / content checks for the http_zig.zig template."""
+
+    @pytest.fixture(autouse=True)
+    def skip_if_missing(self):
+        if "http_zig" not in Builder().list_templates():
+            pytest.skip("http_zig template not present")
+
+    def _src(self, **kw) -> str:
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_zig", **kw)
+        return Builder().build(cfg)
+
+    def test_imports_std(self):
+        assert 'const std = @import("std")' in self._src()
+
+    def test_has_main_function(self):
+        assert "pub fn main()" in self._src()
+
+    def test_has_task_struct(self):
+        assert "const Task = struct {" in self._src()
+
+    def test_has_implant_struct(self):
+        assert "const Implant = struct {" in self._src()
+
+    def test_has_run_method(self):
+        assert "pub fn run(" in self._src()
+
+    def test_url_type_is_zig_slice(self):
+        """The C2 URL constant uses a Zig []const u8 type annotation."""
+        assert "[]const u8" in self._src()
+
+    def test_beacon_interval_substituted(self):
+        src = self._src(interval=20)
+        assert "BEACON_INTERVAL" in src
+        assert "20" in src
+
+    def test_beacon_jitter_substituted(self):
+        src = self._src(jitter=0.25)
+        assert "BEACON_JITTER" in src
+        assert "0.25" in src
+
+    def test_task_types_documented_in_template(self):
+        """Core task types are at least referenced (in comments or doc)."""
+        src = self._src()
+        for task in ("shell", "sysinfo", "whoami", "sleep", "kill"):
+            assert task in src, f"Task type '{task}' not mentioned in Zig template"
+
+    def test_uses_general_purpose_allocator(self):
+        assert "GeneralPurposeAllocator" in self._src()
+
+    @pytest.mark.skipif(
+        __import__("shutil").which("zig") is None,
+        reason="Zig compiler not installed",
+    )
+    def test_compiles_with_zig(self, tmp_path):
+        """Template compiles cleanly; @panic stubs are valid Zig (runtime, not compile-time)."""
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_zig")
+        src_path = Builder().build_to_file(cfg, tmp_path / "agent.zig")
+        result = subprocess.run(
+            ["zig", "build-exe", str(src_path), f"-femit-bin={tmp_path / 'agent'}"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, (
+            f"zig build-exe failed:\n{result.stdout}\n{result.stderr}"
+        )
+
+
+# ── CLI (main()) ──────────────────────────────────────────────────────────────
+
+
+class TestCLI:
+    """Tests for the implants.builder command-line interface."""
+
+    # -- list subcommand --
+
+    def test_list_prints_template_names(self, tmp_templates, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        from implants.builder import main
+        main(["list"])
+        assert "basic" in capsys.readouterr().out
+
+    def test_list_shows_file_extension(self, tmp_templates, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        from implants.builder import main
+        main(["list"])
+        assert ".py" in capsys.readouterr().out
+
+    def test_list_empty_dir_prints_no_templates(self, tmp_path, monkeypatch, capsys):
+        import implants.builder as bmod
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", empty)
+        from implants.builder import main
+        main(["list"])
+        assert "No templates" in capsys.readouterr().out
+
+    # -- build subcommand (stdout) --
+
+    def test_build_stdout_contains_c2_url(self, tmp_templates, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        from implants.builder import main
+        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic"])
+        assert "http://1.2.3.4:8443" in capsys.readouterr().out
+
+    def test_build_stdout_no_tokens_remain(self, tmp_templates, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        from implants.builder import main
+        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic"])
+        out = capsys.readouterr().out
+        for tok in ("URSA_C2_URL", "URSA_INTERVAL", "URSA_JITTER"):
+            assert tok not in out
+
+    def test_build_uses_custom_interval(self, tmp_templates, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        from implants.builder import main
+        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+              "--interval", "42"])
+        assert "42" in capsys.readouterr().out
+
+    def test_build_uses_custom_jitter(self, tmp_templates, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        from implants.builder import main
+        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+              "--jitter", "0.7"])
+        assert "0.7" in capsys.readouterr().out
+
+    def test_build_auto_detects_c2_url_when_omitted(self, tmp_templates, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        monkeypatch.setattr(bmod, "auto_c2_url", lambda: "http://AUTO:8443")
+        from implants.builder import main
+        main(["build", "--template", "basic"])
+        assert "http://AUTO:8443" in capsys.readouterr().out
+
+    def test_build_missing_template_exits_1(self, capsys):
+        from implants.builder import main
+        with pytest.raises(SystemExit) as exc:
+            main(["build", "--c2", "http://1.2.3.4:8443", "--template", "GHOST"])
+        assert exc.value.code == 1
+
+    # -- build subcommand (--output) --
+
+    def test_build_writes_source_to_file(self, tmp_templates, tmp_path, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        out_file = tmp_path / "payload.py"
+        from implants.builder import main
+        main(["build", "--c2", "http://5.6.7.8:8443", "--template", "basic",
+              "--output", str(out_file)])
+        assert out_file.exists()
+        assert "http://5.6.7.8:8443" in out_file.read_text()
+
+    def test_build_to_file_prints_source_path(self, tmp_templates, tmp_path, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        out_file = tmp_path / "payload.py"
+        from implants.builder import main
+        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+              "--output", str(out_file)])
+        assert "Source written to" in capsys.readouterr().out
+
+    def test_build_with_post_build_invokes_compile(
+        self, tmp_templates, tmp_path, monkeypatch, capsys
+    ):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        out_file = tmp_path / "payload.py"
+        from implants.builder import main
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = None
+            main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+                  "--output", str(out_file), "--post-build", "echo {output}"])
+        assert mock_run.called
+        assert "Binary:" in capsys.readouterr().out
+
+    def test_build_compile_failure_exits_1(
+        self, tmp_templates, tmp_path, monkeypatch, capsys
+    ):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
+        out_file = tmp_path / "payload.py"
+        from implants.builder import main
+        with patch("subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.CalledProcessError(1, ["false"])
+            with pytest.raises(SystemExit) as exc:
+                main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+                      "--output", str(out_file), "--post-build", "false"])
+        assert exc.value.code == 1
+
+    # -- stager subcommand --
+
+    def test_stager_prints_to_stdout(self, tmp_path, monkeypatch, capsys):
+        import implants.builder as bmod
+        stager = tmp_path / "stager.py"
+        stager.write_text('C2 = "URSA_C2_URL"\n')
+        monkeypatch.setattr(bmod, "STAGER_PATH", stager)
+        from implants.builder import main
+        main(["stager", "--c2", "http://9.9.9.9:8443"])
+        assert "http://9.9.9.9:8443" in capsys.readouterr().out
+
+    def test_stager_writes_to_file(self, tmp_path, monkeypatch, capsys):
+        import implants.builder as bmod
+        stager = tmp_path / "stager.py"
+        stager.write_text('C2 = "URSA_C2_URL"\n')
+        monkeypatch.setattr(bmod, "STAGER_PATH", stager)
+        out_file = tmp_path / "out_stager.py"
+        from implants.builder import main
+        main(["stager", "--c2", "http://9.9.9.9:8443", "--output", str(out_file)])
+        assert "http://9.9.9.9:8443" in out_file.read_text()
+
+    def test_stager_missing_exits_1(self, tmp_path, monkeypatch, capsys):
+        import implants.builder as bmod
+        monkeypatch.setattr(bmod, "STAGER_PATH", tmp_path / "no_such.py")
+        from implants.builder import main
+        with pytest.raises(SystemExit) as exc:
+            main(["stager", "--c2", "http://1.2.3.4:8443"])
+        assert exc.value.code == 1
+
+    def test_stager_auto_detects_c2_url_when_omitted(self, tmp_path, monkeypatch, capsys):
+        import implants.builder as bmod
+        stager = tmp_path / "stager.py"
+        stager.write_text('C2 = "URSA_C2_URL"\n')
+        monkeypatch.setattr(bmod, "STAGER_PATH", stager)
+        monkeypatch.setattr(bmod, "auto_c2_url", lambda: "http://STAGER_AUTO:8443")
+        from implants.builder import main
+        main(["stager"])
+        assert "http://STAGER_AUTO:8443" in capsys.readouterr().out

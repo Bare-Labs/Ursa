@@ -1,5 +1,7 @@
 # Ursa Plan
 
+> **Note:** This file is internal portfolio-alignment tracking and will be removed from the public repository before release.
+
 As of March 8, 2026.
 
 ## Portfolio Alignment

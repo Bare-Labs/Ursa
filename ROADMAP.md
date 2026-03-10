@@ -1,91 +1,65 @@
 # Ursa Roadmap
 
+> **Note:** This file is internal and will be removed from the public repository. Feature documentation lives in [README.md](README.md) and the component READMEs.
+
 ## Vision
 
 Ursa is an AI-native red team toolkit where AI agents and human operators work side by side. The agent handles reconnaissance, automates repetitive tasks, and manages C2 operations through natural conversation, while the human provides judgment, authorization, and strategic direction.
 
-The long-term goal is a complete offensive security platform:
 - **Ursa Minor** handles all reconnaissance and scanning
 - **Ursa Major** manages command and control with both a **web UI** (for humans) and an **MCP interface** (for agents)
 - **Implants** cover multiple platforms and evasion techniques
 - **Post-exploitation modules** handle privilege escalation, lateral movement, and persistence
 
-## Current State
+## Current State (as of March 2026)
 
-What works today:
-- 16 recon/scanning tools in Ursa Minor (all MCP-accessible)
-- Full C2 server with encrypted comms, session management, and task queuing
-- HTTP beacon implant with 13 task types
-- Stager generation for initial delivery
-- MCP integration for both components
+All six roadmap phases are complete. See [README.md](README.md) for the full feature list.
 
-## Gaps
+### Phase 1: Testing & CI ✅
+- pytest suite covering Major, Minor, builder, post-exploitation, evasion (842+ tests)
+- GitHub Actions CI: ruff lint, mypy type check, pytest on push/PR
 
-### Infrastructure
-- **No tests** — needs a pytest suite covering both Major and Minor
-- **No CI/CD** — needs GitHub Actions for linting (ruff), type checking (mypy), and testing
-- **No unified package config** — Minor has a `pyproject.toml`, Major and root don't
-- **No configuration system** — everything is CLI flags or hardcoded
+### Phase 2: Ursa Major Web UI ✅
+- FastAPI web app (`major/web/`) with auth and role-based access (operator/reviewer/admin)
+- Dashboard: session list, task history, file browser, event log, campaign management, governance
+- Real-time updates via SSE
+- Bootstrap admin account from config
 
-### Ursa Major
-- **No web UI** — the primary gap; needs a dashboard for human operators to manage sessions, view results, and issue tasks without the MCP/agent layer
-- **No TLS** — C2 server runs plain HTTP (relies on external reverse proxy for HTTPS)
-- **Single listener** — only HTTP; no DNS, SMB, or other covert channels
-- **No session grouping/tagging** — flat session list, no campaign organization
-- **No persistent config** — no config file, all runtime flags
+### Phase 3: Configuration & Polish ✅
+- YAML config system (`major/config.py`) with dotted-path access and profile overrides
+- Traffic profiles: `default`, `jquery`, `office365`, `github-api` (malleable C2)
+- HTTP redirector: transparent forwarding proxy with path/UA filtering
+- TLS/HTTPS: auto-generated self-signed cert with SAN support, or bring your own
 
-### Ursa Minor
-- **ARP spoof not MCP-exposed** — `arpspoof.py` exists but isn't available through MCP (intentional for safety, but should be reconsidered)
-- **No output persistence** — scan results only returned to the agent, not saved to disk
-- **No scan scheduling** — no recurring or timed scans
-- **No report generation** — no export to HTML/PDF for deliverables
+### Phase 4: Expanded Implants ✅
+- Go beacon (`implants/templates/http_go.go`) — compiled, cross-platform, no runtime deps
+- Zig template (`implants/templates/http_zig.zig`) — skeleton for Zig compilation target
+- Payload builder (`implants/builder.py`) — language-agnostic token substitution + post-build compile step
+- Evasion (`implants/evasion.py`) — sandbox/VM detection, debugger detection, AMSI bypass, obfuscated sleep, process spoofing
+- Persistence mechanisms via post-exploitation modules
 
-### Implants
-- **Python-only** — no compiled payloads (Go, Rust, C) for stealth and portability
-- **Empty templates directory** — no payload template/builder system
-- **No persistence mechanisms** — beacon doesn't survive reboots
-- **No evasion/obfuscation** — no process injection, AMSI bypass, or code obfuscation
-- **No lateral movement** — can't spread to other hosts from a compromised system
+### Phase 5: Post-Exploitation ✅
+- 21 modules across 4 categories: enumeration, credentials, lateral movement, persistence
+- Structured findings format with CRITICAL/HIGH/MEDIUM/LOW severity levels
+- Auto-recon: configurable module queue on first beacon check-in
+- Loot alerting: automatic warning/info events for CRITICAL/HIGH findings
+- Session auto-tagging: OS, arch, privilege, and cloud-cred tags from sysinfo results
+- Operator tools: `ursa_sitrep` (morning briefing), `ursa_session_recon` (per-session findings)
 
-### Cross-Cutting
-- **No authentication on MCP servers** — anyone who can reach them can use them
-- **Empty `payloads/` directory** — reserved but unused
-- **Empty `post/` directory** — no post-exploitation modules exist yet
+### Phase 6: Advanced C2 ✅
+- Traffic profiles with URL remapping, custom headers, and UA filtering
+- HTTPS with cert auto-generation
+- HTTP redirector/proxy chain support
+- Campaign management, checklists, playbooks, handoffs, timelines
+- Governance: step-up approvals, immutable audit chain, HMAC-signed decisions, policy matrix
 
-## Roadmap
+## What's Genuinely Next
 
-### Phase 1: Testing & CI
-- Add pytest suite for Ursa Major (server, database, crypto)
-- Add pytest suite for Ursa Minor (tool output parsing, mock scanning)
-- Set up GitHub Actions: ruff, mypy, pytest
-- Add root `pyproject.toml` to unify the project
+The core roadmap is complete. Honest remaining gaps:
 
-### Phase 2: Ursa Major Web UI
-- FastAPI backend wrapping the existing C2 database/server
-- Web dashboard: session list, task history, file browser, event log
-- Real-time updates (WebSocket or SSE) for new sessions and task results
-- Dark theme, responsive — usable on a second monitor during engagements
-
-### Phase 3: Configuration & Polish
-- YAML/TOML config file system for both Major and Minor
-- Operator profiles (saved connection settings, preferences)
-- Scan result persistence and export (JSON, CSV, HTML reports)
-- Expose ARP spoof through MCP with appropriate safeguards
-
-### Phase 4: Expanded Implants
-- Go implant (compiled, cross-platform)
-- Payload builder/template system
-- Basic evasion (string obfuscation, sleep timers, sandbox detection)
-- Persistence mechanisms (cron, registry, launch agents)
-
-### Phase 5: Post-Exploitation
-- Privilege escalation checkers
-- Lateral movement modules (pass-the-hash, WMI, SSH pivoting)
-- Credential harvesting (browser, keychain, memory)
-- Populate `post/` directory with modules
-
-### Phase 6: Advanced C2
-- Multiple listener types (HTTPS, DNS tunneling, SMB pipes)
-- Session grouping and campaign management
-- Redirector/proxy chain support
-- Traffic profiles (malleable C2 concept)
+- **DNS/SMB listeners** — `major/listeners/dns.py` and `smb.py` exist as stubs; neither is a functional listener yet
+- **Zig beacon implementation** — `http_zig.zig` is a buildable skeleton; all task handlers need implementing
+- **Web UI tests** — `major/web/` has no test coverage
+- **CI improvements** — currently installs via `requirements.txt`; could migrate to poetry, add coverage reporting, matrix builds
+- **Ursa Minor: scan result persistence** — results returned to agent only, not saved to disk
+- **Ursa Minor: report generation** — no export to HTML/PDF for deliverables
