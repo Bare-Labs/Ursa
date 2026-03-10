@@ -25,3 +25,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Agent Context
+PLAN.md
+ROADMAP.md
