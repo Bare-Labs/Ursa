@@ -539,15 +539,17 @@ class TestBeaconJitter:
         assert b.jitter == 0.3
 
     def test_jitter_sleep_stays_above_minimum(self):
-        """_jitter_sleep must never sleep less than 1 second."""
+        """_jitter_sleep must never pass less than 1 second to _obfuscated_sleep."""
         import unittest.mock as mock
+        from implants import beacon as beacon_mod
         from implants.beacon import UrsaBeacon
         b = UrsaBeacon("http://127.0.0.1:8443", interval=1, jitter=0.9,
-                        sandbox_check=False)
+                        sandbox_check=False, amsi_bypass=False)
         sleep_calls = []
-        with mock.patch("time.sleep", side_effect=lambda t: sleep_calls.append(t)):
+        with mock.patch.object(beacon_mod, "_obfuscated_sleep",
+                               side_effect=lambda t: sleep_calls.append(t)):
             b._jitter_sleep()
-        assert sleep_calls, "sleep was not called"
+        assert sleep_calls, "_obfuscated_sleep was not called"
         assert sleep_calls[0] >= 1
 
 
