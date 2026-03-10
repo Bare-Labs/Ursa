@@ -5,7 +5,7 @@ import json
 import urllib.error
 import urllib.request
 
-from major.db import create_task, get_session, get_task
+from major.db import create_task, get_session, get_task, list_tasks, set_setting
 
 
 def _post(host, port, path, data):
@@ -177,3 +177,143 @@ class TestStageEndpoint:
         status, body = _get(host, port, "/stage")
         assert status == 200
         assert len(body) > 0
+
+
+class TestAutoRecon:
+    """Auto-recon: queue initial recon sequence on new session registration."""
+
+    def _register(self, host, port, hostname="RECON1"):
+        _, resp = _post(host, port, "/register", {"hostname": hostname, "username": "op"})
+        return resp["session_id"]
+
+    # ── disabled (default) ────────────────────────────────────────────────────
+
+    def test_no_auto_recon_tasks_when_disabled(self, c2_test_server, tmp_db):
+        """Default: auto-recon is off — no tasks queued on registration."""
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = list_tasks(session_id=sid)
+        assert tasks == [], "Expected zero tasks when auto-recon is disabled"
+
+    def test_beacon_returns_no_tasks_when_disabled(self, c2_test_server, tmp_db):
+        """Beacon check-in with no auto-recon yields empty task list."""
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        _, beacon_resp = _post(host, port, "/beacon", {"session_id": sid})
+        assert beacon_resp.get("tasks", []) == []
+
+    # ── enabled ───────────────────────────────────────────────────────────────
+
+    def test_auto_recon_queues_tasks_when_enabled(self, c2_test_server, tmp_db):
+        """Enable auto-recon → tasks queued immediately on registration."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = list_tasks(session_id=sid)
+        assert len(tasks) > 0, "Expected auto-recon tasks to be queued"
+
+    def test_auto_recon_queues_default_module_count(self, c2_test_server, tmp_db):
+        """Default module list has 5 entries: sysinfo, users, privesc, network, loot."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = list_tasks(session_id=sid)
+        assert len(tasks) == 5
+
+    def test_auto_recon_tasks_are_type_post(self, c2_test_server, tmp_db):
+        """All auto-recon tasks must be of type 'post'."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = list_tasks(session_id=sid)
+        assert all(t["task_type"] == "post" for t in tasks)
+
+    def test_auto_recon_task_args_contain_module_and_code(self, c2_test_server, tmp_db):
+        """Each auto-recon task args must include 'module' and 'code'."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = list_tasks(session_id=sid)
+        for t in tasks:
+            args = json.loads(t["args"]) if isinstance(t["args"], str) else t["args"]
+            assert "module" in args, f"Missing 'module' in args: {args}"
+            assert "code"   in args, f"Missing 'code'   in args: {args}"
+
+    def test_auto_recon_module_order(self, c2_test_server, tmp_db):
+        """Tasks queued in the expected order: sysinfo → users → privesc → network → loot."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        # list_tasks returns DESC; sort ASC by created_at to get insertion order
+        tasks = sorted(list_tasks(session_id=sid), key=lambda t: t["created_at"])
+        modules = [
+            json.loads(t["args"])["module"]
+            if isinstance(t["args"], str)
+            else t["args"]["module"]
+            for t in tasks
+        ]
+        assert modules == [
+            "enum/sysinfo",
+            "enum/users",
+            "enum/privesc",
+            "enum/network",
+            "enum/loot",
+        ]
+
+    def test_auto_recon_custom_module_list(self, c2_test_server, tmp_db):
+        """Custom module list is respected when set via DB settings."""
+        custom = ["enum/sysinfo", "enum/network"]
+        set_setting("auto_recon.enabled", True)
+        set_setting("auto_recon.modules", custom)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = sorted(list_tasks(session_id=sid), key=lambda t: t["created_at"])
+        assert len(tasks) == 2
+        modules = [
+            json.loads(t["args"])["module"]
+            if isinstance(t["args"], str)
+            else t["args"]["module"]
+            for t in tasks
+        ]
+        assert modules == custom
+
+    def test_auto_recon_tasks_start_pending(self, c2_test_server, tmp_db):
+        """Auto-recon tasks are initially in 'pending' state."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = list_tasks(session_id=sid)
+        assert all(t["status"] == "pending" for t in tasks)
+
+    def test_auto_recon_beacon_delivers_tasks(self, c2_test_server, tmp_db):
+        """First beacon check-in after registration receives all queued tasks."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        _, beacon_resp = _post(host, port, "/beacon", {"session_id": sid})
+        delivered = beacon_resp.get("tasks", [])
+        assert len(delivered) == 5
+        assert all(t["type"] == "post" for t in delivered)
+
+    def test_disable_setting_overrides_enable(self, c2_test_server, tmp_db):
+        """Explicitly disabling (set False) suppresses auto-recon even if config default were True."""
+        set_setting("auto_recon.enabled", False)
+        host, port = c2_test_server
+        sid = self._register(host, port)
+        tasks = list_tasks(session_id=sid)
+        assert tasks == []
+
+    def test_multiple_sessions_each_get_own_tasks(self, c2_test_server, tmp_db):
+        """Each new session gets its own independent auto-recon task set."""
+        set_setting("auto_recon.enabled", True)
+        host, port = c2_test_server
+        sid1 = self._register(host, port, hostname="HOST1")
+        sid2 = self._register(host, port, hostname="HOST2")
+        tasks1 = list_tasks(session_id=sid1)
+        tasks2 = list_tasks(session_id=sid2)
+        assert len(tasks1) == 5
+        assert len(tasks2) == 5
+        # Tasks are independent — different task IDs
+        ids1 = {t["id"] for t in tasks1}
+        ids2 = {t["id"] for t in tasks2}
+        assert ids1.isdisjoint(ids2)

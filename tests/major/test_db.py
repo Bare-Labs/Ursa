@@ -527,3 +527,45 @@ class TestUsers:
         assert db.set_user_password(user_id, "new-pass") is True
         assert db.authenticate_user("bob", "initial-pass") is None
         assert db.authenticate_user("bob", "new-pass") is not None
+
+
+class TestSettings:
+
+    def test_get_missing_key_returns_none(self, tmp_db):
+        assert db.get_setting("nonexistent.key") is None
+
+    def test_get_missing_key_returns_custom_default(self, tmp_db):
+        assert db.get_setting("nonexistent.key", default=42) == 42
+
+    def test_set_and_get_bool(self, tmp_db):
+        db.set_setting("auto_recon.enabled", True)
+        assert db.get_setting("auto_recon.enabled") is True
+        db.set_setting("auto_recon.enabled", False)
+        assert db.get_setting("auto_recon.enabled") is False
+
+    def test_set_and_get_list(self, tmp_db):
+        modules = ["enum/sysinfo", "enum/users", "enum/network"]
+        db.set_setting("auto_recon.modules", modules)
+        result = db.get_setting("auto_recon.modules")
+        assert result == modules
+
+    def test_set_and_get_string(self, tmp_db):
+        db.set_setting("some.string.key", "hello world")
+        assert db.get_setting("some.string.key") == "hello world"
+
+    def test_set_overwrites_existing(self, tmp_db):
+        db.set_setting("auto_recon.enabled", True)
+        db.set_setting("auto_recon.enabled", False)
+        assert db.get_setting("auto_recon.enabled") is False
+
+    def test_multiple_independent_keys(self, tmp_db):
+        db.set_setting("key.a", 1)
+        db.set_setting("key.b", 2)
+        assert db.get_setting("key.a") == 1
+        assert db.get_setting("key.b") == 2
+
+    def test_set_and_get_dict(self, tmp_db):
+        data = {"foo": "bar", "count": 3}
+        db.set_setting("complex.key", data)
+        result = db.get_setting("complex.key")
+        assert result == data

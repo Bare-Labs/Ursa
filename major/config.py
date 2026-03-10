@@ -88,6 +88,17 @@ DEFAULTS = {
         # Trusted redirector IPs — X-Forwarded-For from these IPs is trusted
         # to contain the real implant IP (set to your redirector IP)
         "trusted_redirectors": [],
+        # Auto-recon — queue an initial recon sequence on first beacon check-in
+        "auto_recon": {
+            "enabled": False,
+            "modules": [
+                "enum/sysinfo",
+                "enum/users",
+                "enum/privesc",
+                "enum/network",
+                "enum/loot",
+            ],
+        },
         "governance": {
             # Route policy decisions through the BearClaw enforcement path.
             # "local" performs local policy checks compatible with BearClaw inputs.

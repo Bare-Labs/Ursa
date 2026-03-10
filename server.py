@@ -95,6 +95,7 @@ from major.db import (  # noqa: E402
     get_events,
     get_immutable_audit,
     get_session,
+    get_setting,
     get_task,
     kill_session,
     list_approval_requests,
@@ -106,6 +107,7 @@ from major.db import (  # noqa: E402
     list_files,
     list_sessions,
     list_tasks,
+    set_setting,
     snapshot_campaign_checklist_to_playbook,
     update_campaign_checklist_item,
     update_session_info,
@@ -2410,6 +2412,384 @@ def ursa_post_dispatch(session_id: str, module: str, args: dict | None = None) -
         f"Will execute on next beacon (interval: {s['beacon_interval']}s)\n"
         f"Use ursa_task_result('{task_id}') to retrieve output."
     )
+
+
+_AUTO_RECON_DEFAULT_MODULES = [
+    "enum/sysinfo", "enum/users", "enum/privesc", "enum/network", "enum/loot",
+]
+
+
+@mcp_server.tool()
+def ursa_auto_recon_status() -> str:
+    """Show the current auto-recon configuration.
+
+    Auto-recon automatically queues a standard initial recon sequence
+    (enum/sysinfo → users → privesc → network → loot) when a new implant
+    registers with the C2, giving you a full situational picture without
+    any manual steps.
+    """
+    from major.config import get_config as _get_cfg
+
+    cfg_enabled = bool(_get_cfg().get("major.auto_recon.enabled", False))
+    cfg_modules = list(_get_cfg().get("major.auto_recon.modules", _AUTO_RECON_DEFAULT_MODULES))
+
+    rt_enabled = get_setting("auto_recon.enabled")
+    rt_modules  = get_setting("auto_recon.modules")
+
+    effective_enabled = rt_enabled if rt_enabled is not None else cfg_enabled
+    effective_modules = rt_modules  if rt_modules  is not None else cfg_modules
+
+    lines = [
+        "── Auto-Recon Status ──────────────────────────────",
+        f"  Enabled (effective): {'YES ✓' if effective_enabled else 'NO'}",
+        f"  Enabled (config):    {'yes' if cfg_enabled else 'no'}",
+        f"  Enabled (runtime):   {'yes' if rt_enabled else 'no'  if rt_enabled is not None else '(not set)'}",
+        "",
+        "  Modules (effective):",
+    ]
+    for m in effective_modules:
+        lines.append(f"    • {m}")
+    if rt_modules is not None and rt_modules != cfg_modules:
+        lines += ["", "  Note: runtime module list overrides ursa.yaml"]
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_auto_recon_enable(
+    modules: list[str] | None = None,
+) -> str:
+    """Enable auto-recon for new implant sessions.
+
+    When enabled, the C2 automatically queues an initial recon sequence
+    (enum/sysinfo → users → privesc → network → loot) the moment a new
+    beacon registers, so you get a full situational picture without any
+    manual steps.
+
+    This setting takes effect immediately for all new sessions and persists
+    across C2 server restarts via the DB.
+
+    Args:
+        modules: Optional list of post modules to run in order.
+                 Defaults to [enum/sysinfo, enum/users, enum/privesc,
+                 enum/network, enum/loot].
+    """
+    effective_modules = modules if modules else _AUTO_RECON_DEFAULT_MODULES
+    set_setting("auto_recon.enabled", True)
+    set_setting("auto_recon.modules", effective_modules)
+    lines = [
+        "Auto-recon ENABLED.",
+        "New sessions will automatically receive:",
+    ]
+    for i, m in enumerate(effective_modules):
+        lines.append(f"  {i + 1}. {m}")
+    lines.append("\nUse ursa_auto_recon_disable() to turn off.")
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_auto_recon_disable() -> str:
+    """Disable auto-recon for new implant sessions.
+
+    New beacons will register normally without any automatic task queuing.
+    Use ursa_auto_recon_enable() to turn it back on.
+    """
+    set_setting("auto_recon.enabled", False)
+    return (
+        "Auto-recon DISABLED.\n"
+        "New sessions will register without automatic recon tasks.\n"
+        "Use ursa_auto_recon_enable() to re-enable."
+    )
+
+
+# ── Recon helpers ─────────────────────────────────────────────────────────────
+
+_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+_SEV_ICONS      = {"CRITICAL": "✦", "HIGH": "▲", "MEDIUM": "●", "LOW": "·"}
+_LOOT_MODULES   = {"enum/loot", "cred/loot"}
+
+
+def _parse_post_result(result_str: str) -> tuple[str, dict]:
+    """Split a beacon post-task result into (output_text, data_dict)."""
+    sentinel = "\n\n--- data ---\n"
+    if sentinel in result_str:
+        output, data_json = result_str.split(sentinel, 1)
+        try:
+            return output, json.loads(data_json)
+        except (json.JSONDecodeError, ValueError):
+            return output, {}
+    return result_str, {}
+
+
+def _collect_findings(tasks: list) -> list[dict]:
+    """Extract structured findings from all completed loot post-tasks."""
+    all_findings: list[dict] = []
+    for t in tasks:
+        if t.get("task_type") != "post" or t.get("status") != "completed":
+            continue
+        args = json.loads(t["args"]) if isinstance(t["args"], str) else (t["args"] or {})
+        module = args.get("module", "")
+        if module not in _LOOT_MODULES:
+            continue
+        _, data = _parse_post_result(t.get("result") or "")
+        for f in data.get("findings", []):
+            all_findings.append({**f, "_module": module, "_task_id": t["id"]})
+    return sorted(all_findings, key=lambda f: _SEVERITY_ORDER.get(f.get("severity", "LOW"), 3))
+
+
+@mcp_server.tool()
+def ursa_session_recon(session_id: str) -> str:
+    """Show the structured recon findings for a session.
+
+    Parses all completed auto-recon post-task results for the session and
+    renders a prioritised findings report (CRITICAL → HIGH → MEDIUM → LOW)
+    plus a per-module status table.
+
+    Works best after auto-recon tasks have completed, but shows pending /
+    in-progress status if they haven't yet.
+
+    Args:
+        session_id: Target session ID.
+    """
+    s = get_session(session_id)
+    if not s:
+        return f"Session {session_id} not found."
+
+    all_tasks = [t for t in list_tasks(session_id=session_id, limit=200)
+                 if t.get("task_type") == "post"]
+    # Sort ascending (oldest first) for status table
+    all_tasks_asc = sorted(all_tasks, key=lambda t: t.get("created_at") or 0)
+
+    header = (
+        f"── Recon Report: {session_id} "
+        f"({s.get('username', '?')}@{s.get('hostname', '?')} · "
+        f"{s.get('os', '?')}) ──"
+    )
+
+    # ── Module status table ──
+    status_lines = ["", "Module Status:"]
+    status_icons = {"pending": "⏳", "in_progress": "⟳", "completed": "✓", "error": "✗"}
+    for t in all_tasks_asc:
+        args = json.loads(t["args"]) if isinstance(t["args"], str) else (t["args"] or {})
+        module  = args.get("module", t.get("task_type", "?"))
+        status  = t.get("status", "?")
+        icon    = status_icons.get(status, "?")
+        age     = _time_ago(t.get("completed_at") or t.get("picked_up_at") or t.get("created_at"))
+        # For completed non-loot modules, show a one-liner from output
+        snippet = ""
+        if status == "completed" and module not in _LOOT_MODULES:
+            result_text, _ = _parse_post_result(t.get("result") or "")
+            first = next((ln.strip() for ln in result_text.splitlines() if ln.strip()), "")
+            snippet = f"  → {first[:80]}" if first else ""
+        elif status == "error":
+            snippet = f"  → {(t.get('error') or '')[:60]}"
+        status_lines.append(f"  {icon} {module:<25} {status:<12} {age}{snippet}")
+
+    # ── Findings from loot modules ──
+    findings = _collect_findings(all_tasks)
+
+    if not findings:
+        # Check if any loot tasks are still pending/in-progress
+        loot_pending = [t for t in all_tasks
+                        if (json.loads(t["args"]) if isinstance(t["args"], str) else t.get("args", {}))
+                        .get("module") in _LOOT_MODULES
+                        and t.get("status") in ("pending", "in_progress")]
+        if loot_pending:
+            findings_block = "\nFindings: loot modules still running — check back after next beacon check-in."
+        elif not any(
+            (json.loads(t["args"]) if isinstance(t["args"], str) else t.get("args", {})).get("module") in _LOOT_MODULES
+            for t in all_tasks
+        ):
+            findings_block = "\nFindings: no loot modules in task list. Run ursa_post_dispatch with enum/loot or cred/loot."
+        else:
+            findings_block = "\nFindings: loot modules completed with no findings."
+    else:
+        counts = {}
+        for f in findings:
+            counts[f.get("severity", "?")] = counts.get(f.get("severity", "?"), 0) + 1
+        summary = "  ".join(f"{sev}:{n}" for sev, n in
+                            sorted(counts.items(), key=lambda x: _SEVERITY_ORDER.get(x[0], 9)))
+
+        finding_lines = [f"\nFindings ({summary}):"]
+        cur_sev = None
+        for f in findings:
+            sev = f.get("severity", "?")
+            if sev != cur_sev:
+                finding_lines.append(f"\n  {sev}")
+                cur_sev = sev
+            icon = _SEV_ICONS.get(sev, "·")
+            title  = f.get("title", "?")
+            detail = f.get("detail", "")
+            mod    = f.get("_module", "")
+            finding_lines.append(f"  {icon} [{mod}] {title}")
+            if detail:
+                # Wrap long details
+                for chunk in [detail[i:i+90] for i in range(0, min(len(detail), 270), 90)]:
+                    finding_lines.append(f"      {chunk}")
+        findings_block = "\n".join(finding_lines)
+
+    total = len(all_tasks)
+    done  = sum(1 for t in all_tasks if t.get("status") == "completed")
+    pending_n = sum(1 for t in all_tasks if t.get("status") == "pending")
+    err_n = sum(1 for t in all_tasks if t.get("status") == "error")
+    task_summary = f"Post tasks: {total} total | {done} completed"
+    if pending_n:
+        task_summary += f", {pending_n} pending"
+    if err_n:
+        task_summary += f", {err_n} errors"
+
+    return "\n".join([header, task_summary] + status_lines) + findings_block
+
+
+@mcp_server.tool()
+def ursa_sitrep() -> str:
+    """Operator situation report — full C2 picture in one command.
+
+    Aggregates active sessions, task queue status, recent warnings,
+    critical findings from completed recon, and pending approvals.
+    Use this as your morning briefing or quick status check.
+    """
+    now = time.time()
+    ts  = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M")
+
+    # ── Sessions ──
+    sessions = list_sessions()
+    by_status: dict[str, list] = {}
+    for s in sessions:
+        by_status.setdefault(s.get("status", "?"), []).append(s)
+    active  = by_status.get("active",  [])
+    stale   = by_status.get("stale",   [])
+    dead    = by_status.get("dead",    [])
+
+    # ── Tasks ──
+    all_tasks = list_tasks(limit=500)
+    task_counts: dict[str, int] = {}
+    for t in all_tasks:
+        task_counts[t["status"]] = task_counts.get(t["status"], 0) + 1
+
+    # ── Approvals ──
+    pending_approvals = list_approval_requests(status="pending", limit=50)
+
+    # ── Recent events (warnings/errors only) ──
+    recent_events = [
+        e for e in get_events(limit=50)
+        if e.get("level") in ("warning", "error")
+        and (now - (e.get("timestamp") or 0)) < 3600
+    ]
+
+    # ── New sessions (last 24h) with recon status ──
+    recent_sessions = [s for s in sessions
+                       if (now - (s.get("first_seen") or 0)) < 86400]
+
+    # ── Critical/High findings from loot modules across all sessions ──
+    critical_findings: list[dict] = []
+    if active or stale:
+        # Only scan sessions with recent activity to keep things snappy
+        scan_sessions = (active + stale)[:20]
+        for s in scan_sessions:
+            sid = s["id"]
+            s_tasks = [t for t in all_tasks
+                       if t.get("session_id") == sid and t.get("task_type") == "post"]
+            for f in _collect_findings(s_tasks):
+                if f.get("severity") in ("CRITICAL", "HIGH"):
+                    critical_findings.append({
+                        **f,
+                        "_session_id": sid,
+                        "_host": f"{s.get('username','?')}@{s.get('hostname','?')}",
+                    })
+
+    # ── Auto-recon status ──
+    rt_enabled = get_setting("auto_recon.enabled")
+    from major.config import get_config as _gcc
+    cfg_enabled = bool(_gcc().get("major.auto_recon.enabled", False))
+    ar_enabled  = rt_enabled if rt_enabled is not None else cfg_enabled
+    ar_modules  = get_setting("auto_recon.modules") or _AUTO_RECON_DEFAULT_MODULES
+
+    # ── Build output ──
+    lines: list[str] = [
+        f"── Ursa Sitrep ─────────────────────── {ts} ──",
+        "",
+    ]
+
+    # Sessions summary
+    lines += [
+        f"  Sessions   {len(active)} active  {len(stale)} stale  {len(dead)} dead",
+        f"  Tasks      "
+        + "  ".join(f"{k}:{v}" for k, v in sorted(task_counts.items())),
+        f"  Approvals  {len(pending_approvals)} pending",
+        f"  Alerts     {len(recent_events)} warn/error in last hour",
+    ]
+
+    # Active sessions
+    if active:
+        lines += ["", "Active Sessions:"]
+        for s in active[:10]:
+            sid      = s["id"]
+            host     = f"{s.get('username','?')}@{s.get('hostname','?')}"
+            os_info  = (s.get("os") or "")[:18]
+            age      = _time_ago(s.get("last_seen"))
+            # Recon progress
+            s_tasks  = [t for t in all_tasks
+                        if t.get("session_id") == sid and t.get("task_type") == "post"]
+            done_n   = sum(1 for t in s_tasks if t.get("status") == "completed")
+            total_n  = len(s_tasks)
+            recon    = f"recon:{done_n}/{total_n}" if total_n else "recon:none"
+            lines.append(f"  {sid}  {host:<28} {os_info:<18} {age:<10} [{recon}]")
+        if len(active) > 10:
+            lines.append(f"  … and {len(active) - 10} more")
+
+    # Stale sessions
+    if stale:
+        lines += ["", f"Stale Sessions ({len(stale)}):"]
+        for s in stale[:5]:
+            lines.append(
+                f"  {s['id']}  {s.get('username','?')}@{s.get('hostname','?')}  "
+                f"last seen {_time_ago(s.get('last_seen'))}"
+            )
+
+    # Critical findings
+    if critical_findings:
+        lines += ["", "⚠ Critical/High Findings:"]
+        for f in critical_findings[:15]:
+            sev  = f.get("severity", "?")
+            icon = _SEV_ICONS.get(sev, "·")
+            lines.append(
+                f"  {icon} {f['_session_id']} ({f['_host']})  "
+                f"[{sev}] {f.get('title','?')}"
+            )
+        if len(critical_findings) > 15:
+            lines.append(f"  … and {len(critical_findings)-15} more. Use ursa_session_recon() for full details.")
+    else:
+        lines += ["", "  No critical/high findings from completed recon."]
+
+    # Pending approvals
+    if pending_approvals:
+        lines += ["", f"Pending Approvals ({len(pending_approvals)}):"]
+        for a in pending_approvals[:5]:
+            lines.append(
+                f"  {a['id']}  [{a.get('risk_level','?').upper()}]  "
+                f"{a.get('action','?')[:60]}  "
+                f"by {a.get('requested_by','?')}"
+            )
+        if len(pending_approvals) > 5:
+            lines.append(f"  … and {len(pending_approvals)-5} more. Use ursa_approvals() to manage.")
+
+    # Auto-recon
+    lines += [
+        "",
+        f"Auto-Recon: {'ENABLED' if ar_enabled else 'DISABLED'}",
+    ]
+    if ar_enabled:
+        lines.append(f"  Modules: {' → '.join(ar_modules)}")
+
+    # New sessions (last 24h) that aren't in active list
+    if recent_sessions:
+        new_not_shown = [s for s in recent_sessions
+                         if s.get("status") != "active" or s not in active]
+        if new_not_shown:
+            lines += ["", f"New Sessions (last 24h, not active): {len(new_not_shown)}"]
+
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _default_payload_path(os_info: str, implant_type: str = "python") -> str:

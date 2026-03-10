@@ -211,6 +211,12 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_campaign_playbooks_updated_at
             ON campaign_playbooks(updated_at);
         CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        );
     """)
     _ensure_sessions_columns(db)
     _ensure_campaign_policy_columns(db)
@@ -1606,6 +1612,31 @@ def touch_user_login(user_id):
     db.commit()
     db.close()
     return changed > 0
+
+
+def get_setting(key: str, default=None):
+    """Get a runtime setting by key. Returns parsed JSON value or default."""
+    db = get_db()
+    row = db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    db.close()
+    if row is None:
+        return default
+    try:
+        return json.loads(row["value"])
+    except (json.JSONDecodeError, TypeError):
+        return row["value"]
+
+
+def set_setting(key: str, value) -> None:
+    """Persist a runtime setting. Value is JSON-serialised."""
+    db = get_db()
+    db.execute(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (key, json.dumps(value), time.time()),
+    )
+    db.commit()
+    db.close()
 
 
 def authenticate_user(username, password):
