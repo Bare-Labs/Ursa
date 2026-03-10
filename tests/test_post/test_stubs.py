@@ -1,7 +1,12 @@
-"""Tests for stub modules (Windows-only, not implemented on this platform).
+"""Tests for stub modules.
 
-The remaining stubs are Windows-specific: WMI and Registry.
-All other post-exploitation modules are now implemented — see test_post_impl.py.
+All post-exploitation modules have now been promoted to IMPLEMENTED = True.
+This file is kept so that future stubs can be added to WINDOWS_STUBS and
+automatically tested for the required stub contract.
+
+Previously stubbed Windows modules (now implemented — see test_post_impl.py):
+  lateral/wmi       → WMIExecModule
+  persist/registry  → RegistryPersistModule
 """
 
 import pytest
@@ -10,10 +15,8 @@ from post.base import PostModule
 from post.lateral.wmi import WMIExecModule
 from post.persist.registry import RegistryPersistModule
 
-WINDOWS_STUBS = [
-    WMIExecModule,
-    RegistryPersistModule,
-]
+# Add any future stubs here.  An empty list means no parametrised tests run.
+WINDOWS_STUBS: list[type[PostModule]] = []
 
 
 class TestStubMetadata:
@@ -60,8 +63,16 @@ class TestStubMetadata:
 
 
 class TestPlatformTags:
+    """Sanity-check platform tags on the formerly-stubbed Windows modules."""
+
     def test_registry_windows_only(self):
         assert RegistryPersistModule.PLATFORM == ["windows"]
 
     def test_wmi_windows_only(self):
         assert WMIExecModule.PLATFORM == ["windows"]
+
+    def test_registry_now_implemented(self):
+        assert RegistryPersistModule.IMPLEMENTED is True
+
+    def test_wmi_now_implemented(self):
+        assert WMIExecModule.IMPLEMENTED is True
