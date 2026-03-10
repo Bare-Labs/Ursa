@@ -628,7 +628,9 @@ def get_my_network_info() -> str:
     except Exception:
         pass
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    return _auto_save("get_my_network_info", result,
+                      {"local_ip": local_ip, "network": network})
 
 
 # ── Web Recon Tools ──

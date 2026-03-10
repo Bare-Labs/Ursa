@@ -77,9 +77,10 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-# Add project root to path
+# Add project root and minor package to path
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "minor" / "src"))
 
 from major.db import (  # noqa: E402
     add_campaign_checklist_item,
@@ -2760,6 +2761,208 @@ def ursa_traffic_profiles() -> str:
 
     except Exception as e:
         return f"Error listing profiles: {e}"
+
+
+# ── Scan Result Persistence ───────────────────────────────────────────────────
+
+
+@mcp_server.tool()
+def ursa_results_list(
+    tool_filter: str | None = None,
+    target_filter: str | None = None,
+    hours: float | None = None,
+    limit: int = 50,
+) -> str:
+    """List saved scan results from Ursa Minor recon tools.
+
+    All Ursa Minor tools (scan_ports, discover_network, vuln_scan, etc.)
+    automatically save their output.  Use this to browse saved results,
+    then fetch full output with ursa_results_get or export with
+    ursa_results_export.
+
+    Args:
+        tool_filter: Filter by tool name substring (e.g. "scan_ports").
+        target_filter: Filter by target IP/host substring.
+        hours: Only return results from the last N hours.
+        limit: Max results to return (default 50).
+    """
+    from ursa_minor.results import list_results
+
+    since: float | None = None
+    if hours is not None:
+        import time
+        since = time.time() - hours * 3600
+
+    results = list_results(
+        tool_filter=tool_filter,
+        target_filter=target_filter,
+        since=since,
+        limit=limit,
+    )
+
+    if not results:
+        filters = []
+        if tool_filter:
+            filters.append(f"tool={tool_filter!r}")
+        if target_filter:
+            filters.append(f"target={target_filter!r}")
+        if hours is not None:
+            filters.append(f"last {hours}h")
+        suffix = f" matching {', '.join(filters)}" if filters else ""
+        return f"No saved scan results found{suffix}.\n\nRun any Ursa Minor scan to start building results."
+
+    lines = [
+        f"Saved Scan Results ({len(results)} of up to {limit})",
+        "=" * 55,
+        "",
+    ]
+    for r in results:
+        meta = r.get("metadata", {})
+        target = (
+            meta.get("target")
+            or meta.get("target_range")
+            or meta.get("domain")
+            or meta.get("url")
+            or ""
+        )
+        target_str = f"  target={target}" if target else ""
+        lines.append(f"  [{r['tool']}]  {r['id']}{target_str}")
+        lines.append(f"    {r['timestamp']}")
+        lines.append("")
+
+    lines.append(f"Use ursa_results_get(result_id) to see full output.")
+    lines.append(f"Use ursa_results_export(result_id) to export to file.")
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_results_get(result_id: str) -> str:
+    """Get the full stored output of a saved scan result.
+
+    Args:
+        result_id: The result ID from ursa_results_list (e.g. "scan_ports_20240315_143022").
+    """
+    from ursa_minor.results import get_result
+
+    record = get_result(result_id)
+    if record is None:
+        return f"Result not found: {result_id}\n\nUse ursa_results_list() to see available IDs."
+
+    tool = record.get("tool", "unknown")
+    ts = record.get("timestamp_str", "")
+    meta = record.get("metadata", {})
+    result_text = record.get("result", "")
+    structured = record.get("structured_data")
+
+    lines = [
+        f"Result: {result_id}",
+        f"Tool:   {tool}",
+        f"Time:   {ts}",
+    ]
+    if meta:
+        lines.append("Meta:   " + "  ".join(f"{k}={v}" for k, v in meta.items()))
+    lines += ["", "─" * 55, "", result_text]
+
+    if structured:
+        lines += ["", "─" * 55, f"Structured data: {len(structured) if isinstance(structured, list) else 'dict'} items"]
+
+    return "\n".join(lines)
+
+
+@mcp_server.tool()
+def ursa_results_export(
+    result_id: str,
+    format: str = "json",
+    output_path: str | None = None,
+) -> str:
+    """Export a single saved scan result to JSON, CSV, or HTML.
+
+    Args:
+        result_id: Result ID from ursa_results_list.
+        format: Output format — "json", "csv", or "html" (default: json).
+        output_path: Write to this file path. If omitted, returns content inline.
+    """
+    from ursa_minor.results import export_json, export_csv, export_html, get_result
+
+    record = get_result(result_id)
+    if record is None:
+        return f"Result not found: {result_id}"
+
+    fmt = format.lower()
+    if fmt == "json":
+        content = export_json(result_id)
+    elif fmt == "csv":
+        content = export_csv(result_id)
+    elif fmt == "html":
+        content = export_html(result_id)
+    else:
+        return f"Unknown format: {format!r}. Choose json, csv, or html."
+
+    if output_path:
+        out = Path(output_path).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(content, encoding="utf-8")
+        return f"Exported {result_id} ({fmt}) → {out}\n({len(content):,} bytes)"
+
+    # Inline return — truncate very large results
+    if len(content) > 8000:
+        return content[:8000] + f"\n\n... [{len(content) - 8000:,} more bytes — use output_path to save to file]"
+    return content
+
+
+@mcp_server.tool()
+def ursa_results_report(
+    result_ids: list[str] | None = None,
+    tool_filter: str | None = None,
+    title: str = "Engagement Report",
+    format: str = "html",
+    output_path: str | None = None,
+) -> str:
+    """Generate a combined engagement report from multiple scan results.
+
+    Bundles results from multiple Ursa Minor scans into a single report.
+    HTML is best for sharing; JSON for programmatic use; CSV for spreadsheets.
+
+    Args:
+        result_ids: Specific result IDs to include. Uses all if omitted.
+        tool_filter: Filter by tool name when result_ids is None.
+        title: Report title (default: "Engagement Report").
+        format: "html", "json", or "csv" (default: html).
+        output_path: Write report to this file. Required for HTML (large output).
+    """
+    from ursa_minor.results import export_engagement_report, list_results
+
+    # Default output path for HTML reports
+    if output_path is None and format.lower() == "html":
+        import time
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = str(Path.home() / ".ursa" / "reports" / f"engagement_{ts}.html")
+
+    content = export_engagement_report(
+        result_ids=result_ids,
+        tool_filter=tool_filter,
+        title=title,
+        format=format.lower(),
+    )
+
+    if output_path:
+        out = Path(output_path).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(content, encoding="utf-8")
+        count = len(result_ids) if result_ids else len(list_results(tool_filter=tool_filter, limit=200))
+        return (
+            f"Engagement report generated\n"
+            f"  Title:   {title}\n"
+            f"  Format:  {format}\n"
+            f"  Results: {count}\n"
+            f"  Saved:   {out}\n"
+            f"  Size:    {len(content):,} bytes"
+        )
+
+    # Inline return — truncate if huge
+    if len(content) > 8000:
+        return content[:8000] + f"\n\n... [{len(content) - 8000:,} more bytes — use output_path to save to file]"
+    return content
 
 
 if __name__ == "__main__":
