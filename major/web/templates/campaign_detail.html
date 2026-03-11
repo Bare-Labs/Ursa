@@ -128,7 +128,7 @@
         <select name="playbook" required>
             <option value="">select playbook</option>
             {% for pb in playbooks %}
-            <option value="{{ pb.name }}">{{ pb.name }} ({{ pb.items|length }} items)</option>
+            <option value="{{ pb.name }}">{{ pb.name }} ({{ pb['items']|length }} items)</option>
             {% endfor %}
         </select>
         <input type="text" name="owner" placeholder="Default owner override">

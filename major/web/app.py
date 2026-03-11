@@ -25,13 +25,6 @@ app = FastAPI(title="Ursa Major C2", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
 session_secret = str(get_config().get("major.web.auth.session_secret", "ursa-dev-session-secret"))
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=session_secret,
-    session_cookie="ursa_web_session",
-    same_site="lax",
-    https_only=False,
-)
 
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
@@ -140,6 +133,17 @@ async def auth_middleware(request, call_next):
         return RedirectResponse(url=login_url, status_code=303)
     return await call_next(request)
 
+
+# SessionMiddleware must be added AFTER @app.middleware("http") so it is
+# inserted outermost in the stack and processes request.session before
+# auth_middleware runs.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=session_secret,
+    session_cookie="ursa_web_session",
+    same_site="lax",
+    https_only=False,
+)
 
 app.include_router(auth.router)
 app.include_router(dashboard.router)

@@ -39,7 +39,7 @@
             <tr>
                 <td class="mono">{{ p.name }}</td>
                 <td>{{ p.description or "-" }}</td>
-                <td>{{ p.items|length }}</td>
+                <td>{{ p['items']|length }}</td>
                 <td>{{ p.updated_at | format_ts }}</td>
                 <td><a class="filter-btn" href="/campaigns/playbooks/{{ p.name }}/export">Export JSON</a></td>
                 <td>
