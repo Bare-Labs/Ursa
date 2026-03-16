@@ -47,6 +47,19 @@ python3 major/server.py --tls              # Enable HTTPS (auto-generates cert)
 python3 -m major.web                       # Default: http://0.0.0.0:8080
 ```
 
+The web UI can be mounted behind a reverse-proxy subpath by setting
+`major.web.base_path`, for example `/ursa`.
+
+### Docker Compose
+
+```bash
+docker compose --env-file .runtime/ursa-major/.env \
+  -f deploy/ursa-major.compose.yaml up -d --build
+```
+
+The compose stack runs the C2 listener and web UI from the same image, with a
+shared `config/ursa.yaml` and `data/` directory for SQLite and TLS material.
+
 Default credentials (change before any non-local deployment):
 - Username: `admin`  Password: `change-me-now`
 
@@ -63,6 +76,8 @@ major:
   tls:
     enabled: true
     hostname: c2.example.com    # SAN for the self-signed cert
+  web:
+    base_path: /ursa            # optional reverse-proxy mount path for the UI
   auto_recon:
     enabled: true
     modules:

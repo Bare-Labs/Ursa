@@ -303,6 +303,110 @@ class TestSafeNextUrl:
 
 
 # ---------------------------------------------------------------------------
+# Base-path support for reverse-proxy subpath mounts
+# ---------------------------------------------------------------------------
+
+class TestWebBasePath:
+
+    def test_normalize_base_path(self):
+        from major.web.app import normalize_base_path
+
+        assert normalize_base_path("") == ""
+        assert normalize_base_path("/") == ""
+        assert normalize_base_path("ursa") == "/ursa"
+        assert normalize_base_path("/ursa/") == "/ursa"
+
+    def test_redirects_are_prefixed(self, web_client, monkeypatch):
+        import major.web.app as web_app
+
+        monkeypatch.setattr(web_app, "WEB_BASE_PATH", "/ursa")
+        resp = web_client.get("/sessions/", follow_redirects=False)
+
+        assert resp.status_code == 303
+        assert resp.headers["location"].startswith("/ursa/auth/login")
+
+    def test_htmx_redirect_header_is_prefixed(self, web_client, monkeypatch):
+        import major.web.app as web_app
+
+        monkeypatch.setattr(web_app, "WEB_BASE_PATH", "/ursa")
+        resp = web_client.get(
+            "/sessions/",
+            headers={"HX-Request": "true"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 401
+        assert resp.headers["HX-Redirect"].startswith("/ursa/auth/login")
+
+    def test_login_page_rewrites_absolute_paths(self, web_client, monkeypatch):
+        import major.web.app as web_app
+
+        monkeypatch.setattr(web_app, "WEB_BASE_PATH", "/ursa")
+        resp = web_client.get("/auth/login")
+
+        assert resp.status_code == 200
+        assert 'href="/ursa/static/style.css"' in resp.text
+        assert 'src="/ursa/static/htmx.min.js"' in resp.text
+        assert 'action="/ursa/auth/login"' in resp.text
+
+    def test_authenticated_pages_rewrite_links(self, web_client, tmp_db, monkeypatch):
+        import major.web.app as web_app
+
+        monkeypatch.setattr(web_app, "WEB_BASE_PATH", "/ursa")
+        _make_user("prefixed", "s3cret!", "operator")
+        _login(web_client, "prefixed", "s3cret!")
+
+        resp = web_client.get("/")
+
+        assert resp.status_code == 200
+        assert 'href="/ursa/"' in resp.text
+        assert 'href="/ursa/sessions/"' in resp.text
+        assert 'href="/ursa/governance/' in resp.text
+
+    def test_login_success_redirect_uses_base_path(self, web_client, tmp_db, monkeypatch):
+        import major.web.app as web_app
+
+        monkeypatch.setattr(web_app, "WEB_BASE_PATH", "/ursa")
+        _make_user("alice_base", "s3cret!", "operator")
+        resp = web_client.post(
+            "/auth/login",
+            data={"username": "alice_base", "password": "s3cret!"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/ursa/"
+
+    def test_login_next_redirect_uses_base_path(self, web_client, tmp_db, monkeypatch):
+        import major.web.app as web_app
+
+        monkeypatch.setattr(web_app, "WEB_BASE_PATH", "/ursa")
+        _make_user("alice_next", "s3cret!", "operator")
+        resp = web_client.post(
+            "/auth/login",
+            data={"username": "alice_next", "password": "s3cret!", "next": "/sessions/"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/ursa/sessions/"
+
+    def test_existing_prefixed_redirect_is_not_double_prefixed(self, web_client, tmp_db, monkeypatch):
+        import major.web.app as web_app
+
+        monkeypatch.setattr(web_app, "WEB_BASE_PATH", "/ursa")
+        _make_user("alice_prefixed", "s3cret!", "operator")
+        resp = web_client.post(
+            "/auth/login",
+            data={"username": "alice_prefixed", "password": "s3cret!", "next": "/ursa/sessions/"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/ursa/sessions/"
+
+
+# ---------------------------------------------------------------------------
 # Auth middleware (redirect / bypass behaviour)
 # ---------------------------------------------------------------------------
 

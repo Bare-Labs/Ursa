@@ -1,6 +1,7 @@
 """Ursa Major — Web UI Application."""
 
 import json
+import re
 import sys
 import time
 from datetime import datetime
@@ -25,8 +26,82 @@ app = FastAPI(title="Ursa Major C2", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
 session_secret = str(get_config().get("major.web.auth.session_secret", "ursa-dev-session-secret"))
+_raw_base_path = str(get_config().get("major.web.base_path", ""))
 
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+
+_HTML_PATH_ATTR_RE = re.compile(
+    r'(?P<prefix>(?:href|src|action|hx-get|hx-post|hx-push-url)=["\'])/(?P<rest>[^"\']*)'
+)
+
+
+def normalize_base_path(path: str) -> str:
+    """Normalise base-path config into '' or '/prefix'."""
+    value = (path or "").strip()
+    if not value or value == "/":
+        return ""
+    value = "/" + value.strip("/")
+    return value.rstrip("/")
+
+
+WEB_BASE_PATH = normalize_base_path(_raw_base_path)
+
+
+def web_path(path: str = "/") -> str:
+    """Prefix an app-local path with the configured base path."""
+    if not path:
+        return WEB_BASE_PATH or "/"
+    if not path.startswith("/") or path.startswith("//"):
+        return path
+    if not WEB_BASE_PATH:
+        return path
+    if path == WEB_BASE_PATH or path.startswith(WEB_BASE_PATH + "/"):
+        return path
+    if path == "/":
+        return WEB_BASE_PATH + "/"
+    return WEB_BASE_PATH + path
+
+
+def _rewrite_html_paths(body: bytes) -> bytes:
+    """Rewrite absolute HTML paths so the UI can live behind a reverse-proxy subpath."""
+    if not WEB_BASE_PATH or not body:
+        return body
+    text = body.decode("utf-8")
+    rewritten = _HTML_PATH_ATTR_RE.sub(
+        lambda m: f"{m.group('prefix')}{WEB_BASE_PATH}/{m.group('rest')}",
+        text,
+    )
+    return rewritten.encode("utf-8")
+
+
+async def _apply_base_path(response: Response) -> Response:
+    """Prefix redirect headers and HTML paths with the configured base path."""
+    if not WEB_BASE_PATH:
+        return response
+
+    for header in ("location", "HX-Redirect"):
+        value = response.headers.get(header)
+        if value:
+            response.headers[header] = web_path(value)
+
+    content_type = response.headers.get("content-type", "").lower()
+    if "text/html" not in content_type:
+        return response
+
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    body = _rewrite_html_paths(body)
+
+    headers = dict(response.headers)
+    headers["content-length"] = str(len(body))
+    return Response(
+        content=body,
+        status_code=response.status_code,
+        headers=headers,
+        media_type=response.media_type,
+        background=response.background,
+    )
 
 
 # -- Template Filters --
@@ -89,6 +164,7 @@ templates.env.filters["time_ago"] = time_ago
 templates.env.filters["status_color"] = status_color
 templates.env.filters["parse_json"] = parse_json
 templates.env.filters["filesizeformat"] = filesizeformat
+templates.env.globals["web_path"] = web_path
 
 
 # -- Register Routers --
@@ -110,9 +186,12 @@ from major.web.routes import (  # noqa: E402
 async def auth_middleware(request, call_next):
     path = request.url.path
     request.state.user = None
+    request.state.web_base_path = WEB_BASE_PATH
+    request.state.web_path = web_path
     public_paths = {"/auth/login"}
     if path.startswith("/static") or path in public_paths:
-        return await call_next(request)
+        response = await call_next(request)
+        return await _apply_base_path(response)
 
     user = None
     user_id = request.session.get("user_id")
@@ -129,9 +208,10 @@ async def auth_middleware(request, call_next):
         if request.headers.get("HX-Request"):
             response = Response(status_code=401)
             response.headers["HX-Redirect"] = login_url
-            return response
-        return RedirectResponse(url=login_url, status_code=303)
-    return await call_next(request)
+            return await _apply_base_path(response)
+        return await _apply_base_path(RedirectResponse(url=login_url, status_code=303))
+    response = await call_next(request)
+    return await _apply_base_path(response)
 
 
 # SessionMiddleware must be added AFTER @app.middleware("http") so it is

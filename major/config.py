@@ -42,6 +42,7 @@ DEFAULTS = {
         "web": {
             "host": "0.0.0.0",
             "port": 8080,
+            "base_path": "",
             "auth": {
                 "session_secret": "ursa-dev-session-secret-change-me",
                 "bootstrap_username": "admin",
