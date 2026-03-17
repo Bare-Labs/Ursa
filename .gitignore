@@ -39,3 +39,6 @@ CONTEXTS.md
 deploy/
 PLAN-TEST*.md
 PLAN*.md
+
+blink/
+blink

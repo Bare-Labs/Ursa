@@ -303,7 +303,7 @@ def export_html(result_id: str) -> str:
   {data_section}
   {output_section}
 
-  <p class="footer">Ursa Minor Recon Toolkit — Bare Labs</p>
+  <p class="footer">Ursa Minor Recon Toolkit — Bare Systems</p>
 </body>
 </html>"""
 
@@ -401,6 +401,6 @@ def export_engagement_report(
 
   {sections}
 
-  <p class="footer">Ursa Minor Recon Toolkit — Bare Labs</p>
+  <p class="footer">Ursa Minor Recon Toolkit — Bare Systems</p>
 </body>
 </html>"""

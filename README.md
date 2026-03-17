@@ -119,7 +119,7 @@ If you want a single project that can be driven conversationally by an AI assist
 ### Setup
 
 ```bash
-git clone https://github.com/BareLabs/Ursa.git
+git clone https://github.com/BareSystems/Ursa.git
 cd Ursa
 
 python3 -m venv venv

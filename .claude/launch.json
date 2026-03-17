@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "web-ui",
-      "runtimeExecutable": "/Users/joecaruso/Projects/BareLabs/Ursa/venv/bin/python",
+      "runtimeExecutable": "/Users/joecaruso/Projects/BareSystems/Ursa/venv/bin/python",
       "runtimeArgs": ["-m", "major.web", "--port", "8080"],
       "port": 8080
     }

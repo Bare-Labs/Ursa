@@ -5,7 +5,7 @@ Ursa Minor — Recon & Scanning Toolkit
 MCP server exposing network reconnaissance tools so Claude can run
 scans directly from conversation.
 
-Part of the Ursa offensive security framework by Bare Labs.
+Part of the Ursa offensive security framework by Bare Systems.
 
 Tools:
   - discover_network: ARP scan to find all devices on the network
