@@ -270,6 +270,47 @@ class TestRoleHelpers:
         result = actor_for(request, "approve")
         assert result == "web:alice:approve"
 
+    def test_require_api_role_accepts_valid_bearer(self, monkeypatch):
+        from major.web.auth import require_api_role
+
+        class DummyConfig:
+            @staticmethod
+            def get(path, default=None):
+                if path == "major.web.auth.api_token":
+                    return "shared-token"
+                return default
+
+        monkeypatch.setattr("major.web.auth.get_config", lambda: DummyConfig())
+
+        user = require_api_role(
+            authorization="Bearer shared-token",
+            x_bearclaw_actor="joe@example.com",
+            x_bearclaw_role="admin",
+        )
+        assert user["username"] == "joe@example.com"
+        assert user["role"] == "admin"
+
+    def test_require_api_role_rejects_invalid_token(self, monkeypatch):
+        from fastapi import HTTPException
+        from major.web.auth import require_api_role
+
+        class DummyConfig:
+            @staticmethod
+            def get(path, default=None):
+                if path == "major.web.auth.api_token":
+                    return "shared-token"
+                return default
+
+        monkeypatch.setattr("major.web.auth.get_config", lambda: DummyConfig())
+
+        with pytest.raises(HTTPException) as exc_info:
+            require_api_role(
+                authorization="Bearer wrong-token",
+                x_bearclaw_actor="joe@example.com",
+                x_bearclaw_role="admin",
+            )
+        assert exc_info.value.status_code == 401
+
 
 # ---------------------------------------------------------------------------
 # _safe_next_url tests (open-redirect protection)

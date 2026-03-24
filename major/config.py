@@ -48,6 +48,7 @@ DEFAULTS = {
                 "bootstrap_username": "admin",
                 "bootstrap_password": "change-me-now",
                 "bootstrap_role": "admin",
+                "api_token": "",
             },
         },
         "implant_defaults": {

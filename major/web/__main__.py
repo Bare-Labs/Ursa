@@ -1,4 +1,4 @@
-"""Run the Ursa Major web UI.
+"""Run the Ursa Major BearClaw admin API.
 
 Usage:
     python -m major.web [--port 8080] [--host 127.0.0.1] [--profile field]
@@ -9,10 +9,11 @@ import argparse
 import uvicorn
 
 from major.config import get_config, reload_config
+from major.db import init_db
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ursa Major Web UI")
+    parser = argparse.ArgumentParser(description="Ursa Major BearClaw admin API")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--host", default=None)
     parser.add_argument("--reload", action="store_true", help="Auto-reload on changes")
@@ -29,7 +30,9 @@ def main():
     host = args.host or cfg.get("major.web.host", "0.0.0.0")
     port = args.port or cfg.get("major.web.port", 8080)
 
-    print("  URSA MAJOR — Web UI")
+    init_db()
+
+    print("  URSA MAJOR — BearClaw Admin API")
     print(f"  http://{host}:{port}")
     print()
 

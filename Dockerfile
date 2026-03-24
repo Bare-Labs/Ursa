@@ -7,19 +7,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        python3-cryptography \
+        python3-fastapi \
+        python3-itsdangerous \
+        python3-jinja2 \
+        python3-python-multipart \
+        python3-sse-starlette \
+        python3-uvicorn \
+        python3-yaml \
     && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --upgrade pip \
-    && pip install \
-        "cryptography>=42.0.0" \
-        "fastapi>=0.115.0" \
-        "itsdangerous>=2.2.0" \
-        "jinja2>=3.1.0" \
-        "python-multipart>=0.0.9" \
-        "pyyaml>=6.0" \
-        "sse-starlette>=2.0.0" \
-        "uvicorn>=0.30.0"
 
 COPY . /app
 

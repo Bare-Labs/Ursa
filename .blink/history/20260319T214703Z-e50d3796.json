@@ -1,0 +1,63 @@
+{
+  "run_id": "20260319T214703Z-e50d3796",
+  "manifest": "/Users/joecaruso/Projects/BareSystems/Ursa/blink.toml",
+  "service": "ursa-major",
+  "operation": "test",
+  "status": "success",
+  "summary": "3/3 passed",
+  "started_at": "2026-03-19T21:47:03Z",
+  "completed_at": "2026-03-19T21:47:04Z",
+  "duration": 0.524,
+  "dry_run": false,
+  "tags": [
+    "smoke",
+    "health"
+  ],
+  "target": {
+    "name": "homelab",
+    "description": "ssh://admin@blink",
+    "type": "ssh"
+  },
+  "test_summary": {
+    "success": true,
+    "passed": 3,
+    "failed": 0,
+    "errored": 0,
+    "skipped": 0,
+    "total": 3,
+    "tests": [
+      {
+        "name": "c2-health",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "smoke",
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.166,
+        "message": null
+      },
+      {
+        "name": "c2-container-running",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.171,
+        "message": null
+      },
+      {
+        "name": "c2-port-published",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.186,
+        "message": null
+      }
+    ]
+  },
+  "config_hash": "7635ae7f9094151bdf4f9a1b2e16273155cdc375d3c5847627592667da1308f9"
+}

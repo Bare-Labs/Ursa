@@ -1,8 +1,8 @@
 # Ursa Minor
 
-Recon and scanning toolkit — the reconnaissance component of [Ursa](../README.md).
+Recon, scanning, and lightweight host-defense toolkit — the reconnaissance component of [Ursa](../README.md).
 
-Ursa Minor provides 16 network reconnaissance and vulnerability scanning tools, available as an MCP server (for AI agents), a CLI, or standalone Python scripts.
+Ursa Minor provides 20 tools across network reconnaissance, vulnerability scanning, and defensive host triage, available as an MCP server (for AI agents), a CLI, or standalone Python scripts.
 
 ## Tools
 
@@ -24,6 +24,10 @@ Ursa Minor provides 16 network reconnaissance and vulnerability scanning tools, 
 | `crack_hash` | Dictionary attack on MD5, SHA1, SHA256, and SHA512 hashes |
 | `identify_hash` | Detect the type of a password hash |
 | `generate_reverse_shell` | Generate reverse shell payloads for bash, python, nc, php, ruby, perl, powershell |
+| `detect_persistence` | Scan common persistence locations and score suspicious artifacts |
+| `create_baseline` | Save a defensive baseline snapshot of persistence, users, and listening ports |
+| `baseline_diff` | Compare current host state against a saved baseline and report drift |
+| `triage_host` | Run a lightweight host triage workflow with optional baseline comparison |
 
 ## Usage
 
@@ -36,6 +40,7 @@ Once configured, Claude can use any tool conversationally:
 > "Scan my network for devices"
 > "Port scan 192.168.1.1"
 > "Check that web server for vulnerabilities"
+> "Triage this Linux host for suspicious persistence"
 
 ### CLI
 
@@ -69,6 +74,8 @@ python3 minor/revshell.py                          # Generate reverse shells
 
 Most tools require `sudo` because they use raw sockets (ARP, ICMP, TCP SYN probes). Tools that only make standard TCP connections or HTTP requests (hash cracking, reverse shell generation, directory busting) do not require elevated privileges.
 
+The defensive triage tools do not require `sudo` when scanning an offline filesystem root. On a live host, elevated privileges may improve visibility into listening ports and system-wide persistence locations.
+
 ## Dependencies
 
 - `scapy` — packet crafting and network scanning
@@ -80,7 +87,7 @@ Most tools require `sudo` because they use raw sockets (ARP, ICMP, TCP SYN probe
 
 ```
 minor/
-├── server.py         # MCP server (all 16 tools)
+├── server.py         # Standalone launcher for the packaged MCP server
 ├── discover.py       # ARP network discovery
 ├── portscan.py       # TCP port scanner
 ├── sniff.py          # Packet capture
@@ -98,5 +105,6 @@ minor/
 ├── pyproject.toml    # Package config
 └── src/ursa_minor/   # Installable package
     ├── cli.py        # Click CLI entry point
+    ├── defense.py    # Defensive host triage and baseline helpers
     └── server.py     # MCP server (package version)
 ```

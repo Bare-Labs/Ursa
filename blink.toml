@@ -1,0 +1,96 @@
+[blink]
+version = "1"
+
+[targets.homelab]
+type            = "ssh"
+host            = "blink"
+user            = "admin"
+base            = "/home/admin/barelabs"
+runtime_dir     = "/home/admin/barelabs/runtime/ursa-major"
+publish_host    = "192.168.86.53"
+c2_port         = "18443"
+web_port        = "18080"
+image_name      = "ursa-major:local"
+compose_project = "ursa-major"
+
+# Homelab network contract:
+#   - publish C2 on 192.168.86.53:18443
+#   - publish major.web on 192.168.86.53:18080 for BearClaw
+#   - keep deploying both c2 and web together; BearClaw Security depends on web
+
+[services.ursa-major]
+description  = "Ursa Major C2 server on the blink homelab host"
+service_name = "ursa-major"
+
+[services.ursa-major.source]
+type          = "containerized_local_build"
+image         = "docker:cli"
+mount         = ".:/workspace"
+workdir       = "/workspace"
+command       = "docker buildx build --platform linux/amd64 --load -t ursa-major:local . && docker tag ursa-major:local registry.home/ursa-major:latest && docker push registry.home/ursa-major:latest && mkdir -p dist && tar -czf dist/ursa-major-deploy.tgz deploy/"
+artifact      = "dist/ursa-major-deploy.tgz"
+docker_socket = true
+
+[services.ursa-major.deploy]
+target            = "homelab"
+pipeline          = ["fetch_artifact", "remote_script", "stop", "backup", "install", "start", "health_check", "verify"]
+rollback_pipeline = ["stop", "rollback", "start", "health_check", "verify"]
+
+[services.ursa-major.remote_script]
+path = "deploy/blink/provision_ursa_major.sh"
+
+[services.ursa-major.stop]
+command = "if [ -f {{runtime_dir}}/.env ] && [ -f {{runtime_dir}}/repo/deploy/ursa-major.compose.yaml ]; then docker compose --env-file {{runtime_dir}}/.env -f {{runtime_dir}}/repo/deploy/ursa-major.compose.yaml down --remove-orphans; fi"
+
+[services.ursa-major.install]
+dest = "runtime/ursa-major/staging/ursa-major-deploy.tgz"
+
+[services.ursa-major.start]
+command = "rm -rf {{runtime_dir}}/repo && mkdir -p {{runtime_dir}}/repo && tar -xzf {{runtime_dir}}/staging/ursa-major-deploy.tgz -C {{runtime_dir}}/repo && docker pull registry.home:5000/ursa-major:latest && docker tag registry.home:5000/ursa-major:latest ursa-major:local && docker compose --env-file {{runtime_dir}}/.env -f {{runtime_dir}}/repo/deploy/ursa-major.compose.yaml up -d c2 web"
+
+[services.ursa-major.health_check]
+url      = "https://{{publish_host}}:{{c2_port}}/health"
+timeout  = 90
+interval = 3
+
+[services.ursa-major.verify]
+suite = "deploy/blink/suites/ursa_major_homelab.rb"
+tags = ["smoke", "health"]
+
+[services.ursa-major.verify.tests.c2-health]
+type          = "http"
+url           = "https://{{publish_host}}:{{c2_port}}/health"
+expect_status = 200
+expect_body   = "healthy"
+tags          = ["smoke", "health"]
+
+[services.ursa-major.verify.tests.c2-container-running]
+type          = "shell"
+command       = "docker inspect --format '{{.State.Status}}' ursa-major-c2-1 2>/dev/null"
+expect_output = "running"
+tags          = ["health"]
+
+[services.ursa-major.verify.tests.c2-port-published]
+type          = "shell"
+command       = "docker ps --filter name=^/ursa-major-c2-1$ --format '{{.Ports}}'"
+expect_output = '/192\.168\.86\.53:18443->8443\/tcp/'
+tags          = ["health"]
+
+[services.ursa-major.verify.tests.web-health]
+type          = "http"
+url           = "http://{{publish_host}}:{{web_port}}/healthz"
+expect_status = 200
+expect_body   = "ursa-admin-api"
+tags          = ["smoke", "health"]
+
+[services.ursa-major.verify.tests.web-port-published]
+type          = "shell"
+command       = "docker ps --filter name=^/ursa-major-web-1$ --format '{{.Ports}}'"
+expect_output = '/192\.168\.86\.53:18080->8080\/tcp/'
+tags          = ["health"]
+
+[services.ursa-major.verify.tests.web-container-running]
+type          = "shell"
+command       = "docker inspect --format '{{.State.Status}}' ursa-major-web-1 2>/dev/null"
+expect_output = "running"
+tags          = ["health"]

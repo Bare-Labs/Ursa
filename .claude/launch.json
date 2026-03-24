@@ -2,10 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "web-ui",
-      "runtimeExecutable": "/Users/joecaruso/Projects/BareSystems/Ursa/venv/bin/python",
-      "runtimeArgs": ["-m", "major.web", "--port", "8080"],
-      "port": 8080
+      "name": "ursa-major-web",
+      "runtimeExecutable": ".claude/scripts/ursa-preview.sh",
+      "runtimeArgs": [],
+      "port": 18080
     }
   ]
 }

@@ -1,0 +1,164 @@
+{
+  "updated_at": "2026-03-21T01:24:27Z",
+  "services": {
+    "ursa-major": {
+      "last_run_id": "20260321T012424Z-471f430e",
+      "last_run": {
+        "run_id": "20260321T012424Z-471f430e",
+        "service": "ursa-major",
+        "operation": "test",
+        "status": "success",
+        "started_at": "2026-03-21T01:24:24Z",
+        "completed_at": "2026-03-21T01:24:27Z",
+        "summary": "9/9 passed"
+      },
+      "last_test": {
+        "run_id": "20260321T012424Z-471f430e",
+        "completed_at": "2026-03-21T01:24:27Z",
+        "target": "ssh://admin@blink",
+        "tags": [],
+        "summary": "9/9 passed",
+        "success": true,
+        "result": {
+          "success": true,
+          "passed": 9,
+          "failed": 0,
+          "errored": 0,
+          "skipped": 0,
+          "total": 9,
+          "tests": [
+            {
+              "name": "c2-health",
+              "suite": "ursa-major:inline",
+              "tags": [
+                "smoke",
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.246,
+              "message": null
+            },
+            {
+              "name": "c2-container-running",
+              "suite": "ursa-major:inline",
+              "tags": [
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.268,
+              "message": null
+            },
+            {
+              "name": "c2-port-published",
+              "suite": "ursa-major:inline",
+              "tags": [
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.263,
+              "message": null
+            },
+            {
+              "name": "web-health",
+              "suite": "ursa-major:inline",
+              "tags": [
+                "smoke",
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.243,
+              "message": null
+            },
+            {
+              "name": "web-port-published",
+              "suite": "ursa-major:inline",
+              "tags": [
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.257,
+              "message": null
+            },
+            {
+              "name": "web-container-running",
+              "suite": "ursa-major:inline",
+              "tags": [
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.209,
+              "message": null
+            },
+            {
+              "name": "c2 health endpoint returns healthy json",
+              "suite": "Ursa Major Homelab",
+              "tags": [
+                "smoke",
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.223,
+              "message": null
+            },
+            {
+              "name": "c2 container is running",
+              "suite": "Ursa Major Homelab",
+              "tags": [
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.238,
+              "message": null
+            },
+            {
+              "name": "c2 port is published on the lan address",
+              "suite": "Ursa Major Homelab",
+              "tags": [
+                "health"
+              ],
+              "status": "pass",
+              "elapsed": 0.245,
+              "message": null
+            }
+          ]
+        }
+      },
+      "last_successful_run_id": "20260321T012108Z-a4e76e91",
+      "last_deploy": {
+        "run_id": "20260321T012108Z-a4e76e91",
+        "completed_at": "2026-03-21T01:21:32Z",
+        "target": "ssh://admin@blink",
+        "target_name": "homelab",
+        "version": "latest",
+        "build_name": null,
+        "summary": "Deploy succeeded",
+        "artifact": {
+          "path": "/Users/joecaruso/Projects/BareSystems/Ursa/.blink/artifacts/ursa-major/beb40cec7398ff734c9571d69befcef2bcfc5f15f3819db51a43f1c7de6a322c-ursa-major-repo.tgz",
+          "sha256": "2c28f7d364d8ec4a5e7d99e59e66491d0def79369fd7b98429996cbbe1713211",
+          "size": 19720859,
+          "cached": true,
+          "source_type": "containerized_local_build",
+          "cache_key": "beb40cec7398ff734c9571d69befcef2bcfc5f15f3819db51a43f1c7de6a322c",
+          "http": null,
+          "integrity": null,
+          "signature": null,
+          "cache_summary": "cached | containerized_local_build",
+          "cache": {
+            "source_type": "containerized_local_build",
+            "version": "latest",
+            "image": "alpine:3.20",
+            "workdir": "/workspace",
+            "cache_key": "beb40cec7398ff734c9571d69befcef2bcfc5f15f3819db51a43f1c7de6a322c",
+            "created_at": "2026-03-21T01:21:12Z"
+          }
+        },
+        "git": {
+          "commit": "a1a83ac126efd3b93c7e5b6fa73721ec09b5e88d",
+          "ref": "main",
+          "dirty": true
+        },
+        "config_hash": "7708f59ee3cd241f0dde6ca585a798c4219f1d6d2096ec80a55a5af4b5858612"
+      }
+    }
+  }
+}

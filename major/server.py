@@ -689,7 +689,7 @@ def start_server(
     _log(f"  Listening: {host}:{port}")
     _log(f"  Protocol:  {protocol}")
     _log(f"  Profile:   {_profile.name} — {_profile.description}")
-    _log(f"  Database:  {os.path.abspath(os.path.join(os.path.dirname(__file__), 'ursa.db'))}")
+    _log(f"  Database:  {cfg.get('major.db_path')}")
     if redirector:
         _log(f"  Redirector: :{redirector.config.listen_port} → {scheme}://{host}:{port}")
     _log("")

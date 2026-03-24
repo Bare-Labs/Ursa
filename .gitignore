@@ -36,9 +36,9 @@ CLAUDE.md
 ROADMAP.md
 PORTFOLIO.md
 CONTEXTS.md
-deploy/
 PLAN-TEST*.md
 PLAN*.md
 
-blink/
+/blink/
+blink.lock
 blink

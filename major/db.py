@@ -15,12 +15,15 @@ from pathlib import Path
 
 from major.config import get_config
 
-DB_PATH = Path(get_config().get("major.db_path"))
+
+def _db_path() -> Path:
+    """Resolve the active database path from the current config."""
+    return Path(get_config().get("major.db_path"))
 
 
 def get_db():
     """Get a database connection with WAL mode for concurrent access."""
-    db = sqlite3.connect(str(DB_PATH), timeout=10)
+    db = sqlite3.connect(str(_db_path()), timeout=10)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
@@ -1649,7 +1652,3 @@ def authenticate_user(username, password):
         return None
     user.pop("password_hash", None)
     return user
-
-
-# Initialize DB on import
-init_db()

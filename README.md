@@ -81,8 +81,8 @@ If you want a single project that can be driven conversationally by an AI assist
 
 | Component | Purpose | Docs |
 |-----------|---------|------|
-| **[Ursa Major](major/)** | Command & control: sessions, tasking, encrypted comms, web UI, governance, and campaign ops | [major/README.md](major/README.md) |
-| **[Ursa Minor](minor/)** | Recon/scanning suite with 16 tools (network, web, creds, SMB/SNMP, hash tooling) | [minor/README.md](minor/README.md) |
+| **[Ursa Major](major/)** | Command and control: sessions, tasking, encrypted comms, admin API, governance, and campaign ops | [major/README.md](major/README.md) |
+| **[Ursa Minor](minor/)** | Recon/scanning and host-triage suite with 20 tools (network, web, creds, SMB/SNMP, hash, defensive baselines) | [minor/README.md](minor/README.md) |
 | **[Implants](implants/)** | Beacon templates (Python/Go/Zig), stager, evasion helpers, payload builder | [implants/README.md](implants/README.md) |
 | **[Post modules](post/)** | Post-exploitation modules (enum, creds, lateral movement, persistence) | — |
 
@@ -136,13 +136,25 @@ pip install ./minor
 # Start C2 (default 0.0.0.0:8443)
 python3 major/server.py
 
-# Start web UI (default 0.0.0.0:8080)
+# Start BearClaw-facing admin API service (default 0.0.0.0:8080)
 python3 -m major.web
 ```
 
-Default UI credentials (change before any non-local deployment):
+Bootstrap credentials for the admin API service (change before any non-local deployment):
 - Username: `admin`
 - Password: `change-me-now`
+
+## Blink Homelab Contract
+
+On `blink`, Ursa has two distinct published surfaces:
+
+- C2 listener: `https://192.168.86.53:18443`
+- BearClaw-facing admin API (`major.web`): `http://192.168.86.53:18080`
+
+BearClaw Security depends on `major.web`, not on the raw C2 listener. Do not
+remove, retire, or stop deploying `major.web` while BearClaw Security pages
+still exist. When BearClaw runs in Docker, it must call the host-published
+admin API address, not host loopback from inside the container.
 
 ---
 
@@ -220,7 +232,7 @@ Ursa Major is an HTTP-based C2 server with:
 - 13 core task types (`shell`, `sysinfo`, `download`, `upload`, `sleep`, `kill`, `post`, etc.)
 - Per-session encrypted communications (AES-256-CTR + HMAC-SHA256)
 - Optional TLS and traffic profiles
-- Operator web UI with role-based access (`operator`, `reviewer`, `admin`)
+- BearClaw-facing admin API service with bearer auth plus bootstrap web auth config
 - 60+ MCP tools for operations, governance, and campaign workflows
 
 For full API/tooling details: **[major/README.md](major/README.md)**
@@ -229,7 +241,7 @@ For full API/tooling details: **[major/README.md](major/README.md)**
 
 ## Ursa Minor (Recon)
 
-Ursa Minor includes 16 reconnaissance and scanning tools, including:
+Ursa Minor includes 20 reconnaissance, scanning, and lightweight host-triage tools, including:
 
 - Network discovery and port/service scanning
 - Packet capture and full recon orchestration
@@ -237,6 +249,7 @@ Ursa Minor includes 16 reconnaissance and scanning tools, including:
 - Credential spraying (SSH/FTP/HTTP Basic)
 - OS fingerprinting, SMB enumeration, SNMP scanning
 - Hash cracking/identification and reverse shell payload generation
+- Defensive persistence scanning, host baselining, and drift triage
 
 Use via MCP, package CLI, or standalone scripts.
 
@@ -276,7 +289,7 @@ This makes Ursa suitable for structured team operations where traceability matte
 
 ```text
 Ursa/
-├── major/             # C2 server, governance, web UI logic
+├── major/             # C2 server, governance, and BearClaw-facing admin API logic
 ├── minor/             # Recon/scanning toolkit
 ├── implants/          # Beacon templates, stager, evasion, builder
 ├── post/              # Post-exploitation modules

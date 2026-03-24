@@ -1,0 +1,122 @@
+{
+  "run_id": "20260321T012424Z-471f430e",
+  "manifest": "/Users/joecaruso/Projects/BareSystems/Ursa/blink.toml",
+  "service": "ursa-major",
+  "operation": "test",
+  "status": "success",
+  "summary": "9/9 passed",
+  "started_at": "2026-03-21T01:24:24Z",
+  "completed_at": "2026-03-21T01:24:27Z",
+  "duration": 2.193,
+  "dry_run": false,
+  "tags": [],
+  "target": {
+    "name": "homelab",
+    "description": "ssh://admin@blink",
+    "type": "ssh"
+  },
+  "test_summary": {
+    "success": true,
+    "passed": 9,
+    "failed": 0,
+    "errored": 0,
+    "skipped": 0,
+    "total": 9,
+    "tests": [
+      {
+        "name": "c2-health",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "smoke",
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.246,
+        "message": null
+      },
+      {
+        "name": "c2-container-running",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.268,
+        "message": null
+      },
+      {
+        "name": "c2-port-published",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.263,
+        "message": null
+      },
+      {
+        "name": "web-health",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "smoke",
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.243,
+        "message": null
+      },
+      {
+        "name": "web-port-published",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.257,
+        "message": null
+      },
+      {
+        "name": "web-container-running",
+        "suite": "ursa-major:inline",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.209,
+        "message": null
+      },
+      {
+        "name": "c2 health endpoint returns healthy json",
+        "suite": "Ursa Major Homelab",
+        "tags": [
+          "smoke",
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.223,
+        "message": null
+      },
+      {
+        "name": "c2 container is running",
+        "suite": "Ursa Major Homelab",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.238,
+        "message": null
+      },
+      {
+        "name": "c2 port is published on the lan address",
+        "suite": "Ursa Major Homelab",
+        "tags": [
+          "health"
+        ],
+        "status": "pass",
+        "elapsed": 0.245,
+        "message": null
+      }
+    ]
+  },
+  "config_hash": "27356a1ddda5bc0186045d8e56acc1b9e0b4366bd095101fcfb659ba4eee1786"
+}

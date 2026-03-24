@@ -2,7 +2,7 @@
 
 Command and control server — the C2 component of [Ursa](../README.md).
 
-Ursa Major is an HTTP-based C2 server that manages implant sessions, queues tasks, collects results, handles file transfers, and provides a web UI and MCP interface for operators.
+Ursa Major is an HTTP-based C2 server that manages implant sessions, queues tasks, collects results, handles file transfers, and provides an admin API plus MCP interface for operators.
 
 ## Architecture
 
@@ -41,14 +41,14 @@ python3 major/server.py --host 127.0.0.1   # Localhost only
 python3 major/server.py --tls              # Enable HTTPS (auto-generates cert)
 ```
 
-### Web UI
+### BearClaw Admin API
 
 ```bash
 python3 -m major.web                       # Default: http://0.0.0.0:8080
 ```
 
-The web UI can be mounted behind a reverse-proxy subpath by setting
-`major.web.base_path`, for example `/ursa`.
+The service now exposes the bearer-authenticated BearClaw admin API on
+`/api/v1/*` plus a lightweight health endpoint at `/healthz`.
 
 ### Docker Compose
 
@@ -57,13 +57,32 @@ docker compose --env-file .runtime/ursa-major/.env \
   -f deploy/ursa-major.compose.yaml up -d --build
 ```
 
-The compose stack runs the C2 listener and web UI from the same image, with a
+The compose stack runs the C2 listener and admin API from the same image, with a
 shared `config/ursa.yaml` and `data/` directory for SQLite and TLS material.
 
-Default credentials (change before any non-local deployment):
-- Username: `admin`  Password: `change-me-now`
+### Blink Deploy
 
-Role-based access: `admin`, `reviewer`, `operator`.
+The repository now includes a root [`blink.toml`](../blink.toml) that packages
+the repo as a tarball, installs it onto the `blink` homelab host, provisions
+runtime config under `/home/admin/barelabs/runtime/ursa-major`, and deploys the
+compose stack from the checked-in [`deploy/ursa-major.compose.yaml`](../deploy/ursa-major.compose.yaml).
+
+Typical flow:
+
+```bash
+blink plan ursa-major
+blink deploy ursa-major
+blink test ursa-major --tags smoke
+```
+
+The default homelab publish targets are:
+- Admin API health: `http://192.168.86.53:18080/healthz`
+- C2 API: `https://192.168.86.53:18443/health`
+
+The BearClaw-facing admin API owns port `18080`. BearClawWeb is the only
+operator UI. Direct browser use of `major.web` routes is intentionally disabled
+and returns HTTP `410 Gone`, but the service itself remains required as the
+experience/API layer for BearClaw.
 
 ### Configuration
 
@@ -77,7 +96,9 @@ major:
     enabled: true
     hostname: c2.example.com    # SAN for the self-signed cert
   web:
-    base_path: /ursa            # optional reverse-proxy mount path for the UI
+    base_path: /ursa            # optional reverse-proxy mount path for the admin API service
+    auth:
+      api_token: your-shared-bearclaw-token
   auto_recon:
     enabled: true
     modules:
@@ -108,6 +129,25 @@ major:
 | `GET` | `/download/<id>` | Implant downloads a file (delivery) |
 | `GET` | `/stage` | Serve the stager payload for initial delivery |
 | `GET` | `/health` | Health check |
+
+### BearClaw Admin API
+
+BearClawWeb consumes Ursa over bearer-authenticated JSON endpoints under `/api/v1/*`.
+
+`major.web` should be treated as the Ursa admin API service. It is not the
+operator product surface, but it is the supported facade between BearClawWeb
+and the Ursa C2 datastore.
+
+Required config:
+
+```yaml
+major:
+  web:
+    auth:
+      api_token: your-shared-bearclaw-token
+```
+
+BearClawWeb must set `URSA_TOKEN` to the same value.
 
 Endpoint paths vary by traffic profile (e.g. the `jquery` profile remaps `/beacon` to `/jquery/3.7.1/jquery.min.js`).
 

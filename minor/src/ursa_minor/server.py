@@ -24,6 +24,10 @@ Tools:
   - os_fingerprint:   OS identification via TCP/IP analysis
   - smb_enum:         SMB share/version enumeration
   - snmp_scan:        SNMP device interrogation
+  - detect_persistence: Scan common persistence locations for suspicious artifacts
+  - create_baseline:  Save a defensive baseline snapshot of host state
+  - baseline_diff:    Compare current host state against a named baseline
+  - triage_host:      Run a lightweight host triage workflow
 
 Run with:
     sudo ursa-minor mcp serve
@@ -36,19 +40,49 @@ import fcntl
 from contextlib import redirect_stdout
 from datetime import datetime
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ImportError:  # pragma: no cover - test fallback when MCP is absent
+    class FastMCP:  # type: ignore[override]
+        def __init__(self, *_args, **_kwargs):
+            pass
 
-from scapy.all import ARP, Ether, srp, IP, TCP, UDP, DNS, DNSQR, DNSRR, ICMP, Raw, conf
-from scapy.all import sniff as scapy_sniff, sr1
+        def tool(self):
+            def decorator(func):
+                return func
 
-conf.verb = 0
+            return decorator
+
+        def run(self):
+            raise RuntimeError("MCP runtime is not installed.")
+
+try:
+    from scapy.all import ARP, Ether, srp, IP, TCP, UDP, DNS, DNSQR, DNSRR, ICMP, Raw, conf
+    from scapy.all import sniff as scapy_sniff, sr1
+
+    conf.verb = 0
+except ImportError:  # pragma: no cover - test fallback when Scapy is absent
+    class _DummyConf:
+        verb = 0
+        iface = ""
+
+    def _missing_scapy(*_args, **_kwargs):
+        raise RuntimeError("Scapy is not installed.")
+
+    class _ScapyLayer:
+        def __init__(self, *_args, **_kwargs):
+            _missing_scapy()
+
+    ARP = Ether = IP = TCP = UDP = DNS = DNSQR = DNSRR = ICMP = Raw = _ScapyLayer
+    srp = scapy_sniff = sr1 = _missing_scapy
+    conf = _DummyConf()
 
 mcp_server = FastMCP(
     "ursa-minor",
     instructions="""Ursa Minor — the recon & scanning component of the Ursa framework.
     You have access to network reconnaissance, vulnerability scanning, credential
-    testing, and enumeration tools. Most tools require the server to be running
-    with sudo for raw network access.""",
+    testing, enumeration, and lightweight host-defense tools. Most tools require
+    the server to be running with sudo for raw network access.""",
 )
 
 
@@ -1820,8 +1854,143 @@ def snmp_scan(
 # ── Scan Result Persistence ──
 
 
+from ursa_minor.defense import (
+    collect_host_snapshot,
+    collect_persistence_entries,
+    diff_snapshots,
+    load_baseline,
+    render_diff_report,
+    render_persistence_report,
+    render_triage_report,
+    save_baseline,
+)
 from ursa_minor.results import list_results, get_result, export_json, export_csv, export_html
 from ursa_minor.results import export_engagement_report as _engagement_report
+
+
+@mcp_server.tool()
+def detect_persistence(
+    root_path: str | None = None,
+    system: str | None = None,
+) -> str:
+    """
+    Scan common persistence locations for suspicious autoruns and startup artifacts.
+
+    Args:
+        root_path: Optional filesystem root to inspect instead of the live host.
+        system: Override platform detection ("linux", "darwin", or "windows").
+    """
+    entries = collect_persistence_entries(root_path=root_path, system=system)
+    result = render_persistence_report(entries)
+    return _auto_save(
+        "detect_persistence",
+        result,
+        {"root_path": root_path or "/", "system": system or ""},
+        structured_data=entries,
+    )
+
+
+@mcp_server.tool()
+def create_baseline(
+    name: str = "default",
+    root_path: str | None = None,
+    system: str | None = None,
+) -> str:
+    """
+    Create and save a defensive host baseline for later drift comparison.
+
+    Args:
+        name: Baseline name (default "default").
+        root_path: Optional filesystem root to inspect instead of the live host.
+        system: Override platform detection ("linux", "darwin", or "windows").
+    """
+    snapshot = collect_host_snapshot(root_path=root_path, system=system)
+    baseline_path = save_baseline(name, snapshot)
+    lines = [
+        f"Baseline saved: {name}",
+        f"Path: {baseline_path}",
+        f"Platform: {snapshot.get('platform', 'unknown')}",
+        f"Persistence artifacts: {len(snapshot.get('persistence', []))}",
+        f"Local users: {len(snapshot.get('users', []))}",
+        f"Listening ports: {len(snapshot.get('listening_ports', []))}",
+    ]
+    result = "\n".join(lines)
+    return _auto_save(
+        "create_baseline",
+        result,
+        {"baseline_name": name, "root_path": root_path or "/", "system": system or ""},
+        structured_data=snapshot,
+    )
+
+
+@mcp_server.tool()
+def baseline_diff(
+    name: str = "default",
+    root_path: str | None = None,
+    system: str | None = None,
+) -> str:
+    """
+    Compare the current host state against a saved baseline.
+
+    Args:
+        name: Baseline name to compare against.
+        root_path: Optional filesystem root to inspect instead of the live host.
+        system: Override platform detection ("linux", "darwin", or "windows").
+    """
+    baseline = load_baseline(name)
+    if not baseline:
+        return f"Baseline '{name}' not found. Run create_baseline(name=\"{name}\") first."
+
+    current = collect_host_snapshot(root_path=root_path, system=system)
+    diff = diff_snapshots(baseline, current)
+    result = render_diff_report(name, diff)
+    return _auto_save(
+        "baseline_diff",
+        result,
+        {"baseline_name": name, "root_path": root_path or "/", "system": system or ""},
+        structured_data=diff,
+    )
+
+
+@mcp_server.tool()
+def triage_host(
+    baseline_name: str | None = None,
+    root_path: str | None = None,
+    system: str | None = None,
+) -> str:
+    """
+    Run a lightweight host-defense triage workflow.
+
+    Args:
+        baseline_name: Optional saved baseline to compare against.
+        root_path: Optional filesystem root to inspect instead of the live host.
+        system: Override platform detection ("linux", "darwin", or "windows").
+    """
+    snapshot = collect_host_snapshot(root_path=root_path, system=system)
+    baseline_diff_data = None
+
+    if baseline_name:
+        baseline = load_baseline(baseline_name)
+        if baseline:
+            baseline_diff_data = diff_snapshots(baseline, snapshot)
+
+    result = render_triage_report(
+        snapshot,
+        snapshot.get("persistence", []),
+        diff=baseline_diff_data,
+        baseline_name=baseline_name if baseline_diff_data else None,
+    )
+    structured = {
+        "snapshot": snapshot,
+        "baseline_name": baseline_name,
+        "baseline_diff": baseline_diff_data,
+    }
+    return _auto_save(
+        "triage_host",
+        result,
+        {"baseline_name": baseline_name or "", "root_path": root_path or "/", "system": system or ""},
+        structured_data=structured,
+    )
 
 
 @mcp_server.tool()

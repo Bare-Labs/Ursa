@@ -1,4 +1,4 @@
-"""Ursa Major — Web UI Application."""
+"""Ursa Major — BearClaw admin API service."""
 
 import json
 import re
@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 WEB_DIR = Path(__file__).parent
 
-app = FastAPI(title="Ursa Major C2", docs_url=None, redoc_url=None)
+app = FastAPI(title="Ursa Major Admin API", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
 session_secret = str(get_config().get("major.web.auth.session_secret", "ursa-dev-session-secret"))
@@ -169,17 +169,7 @@ templates.env.globals["web_path"] = web_path
 
 # -- Register Routers --
 
-from major.web.routes import (  # noqa: E402
-    auth,
-    campaigns,
-    dashboard,
-    events,
-    files,
-    governance,
-    sessions,
-    sse,
-    tasks,
-)
+from major.web.routes import api  # noqa: E402
 
 
 @app.middleware("http")
@@ -188,49 +178,21 @@ async def auth_middleware(request, call_next):
     request.state.user = None
     request.state.web_base_path = WEB_BASE_PATH
     request.state.web_path = web_path
-    public_paths = {"/auth/login"}
-    if path.startswith("/static") or path in public_paths:
+    public_paths = {"/healthz"}
+    if path.startswith("/api/") or path in public_paths:
         response = await call_next(request)
         return await _apply_base_path(response)
 
-    user = None
-    user_id = request.session.get("user_id")
-    if user_id:
-        user = get_user_by_id(user_id)
-        if user and user.get("is_active"):
-            request.state.user = user
-        else:
-            request.session.clear()
-
-    if not user:
-        next_path = request.url.path + (f"?{request.url.query}" if request.url.query else "")
-        login_url = f"/auth/login?next={quote(next_path, safe='')}"
-        if request.headers.get("HX-Request"):
-            response = Response(status_code=401)
-            response.headers["HX-Redirect"] = login_url
-            return await _apply_base_path(response)
-        return await _apply_base_path(RedirectResponse(url=login_url, status_code=303))
-    response = await call_next(request)
-    return await _apply_base_path(response)
+    body = (
+        "Direct Ursa web UI routes are disabled. "
+        "Use BearClawWeb for operator workflows."
+    )
+    return await _apply_base_path(Response(content=body, status_code=410, media_type="text/plain"))
 
 
-# SessionMiddleware must be added AFTER @app.middleware("http") so it is
-# inserted outermost in the stack and processes request.session before
-# auth_middleware runs.
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=session_secret,
-    session_cookie="ursa_web_session",
-    same_site="lax",
-    https_only=False,
-)
 
-app.include_router(auth.router)
-app.include_router(dashboard.router)
-app.include_router(campaigns.router)
-app.include_router(sessions.router)
-app.include_router(tasks.router)
-app.include_router(files.router)
-app.include_router(events.router)
-app.include_router(governance.router)
-app.include_router(sse.router)
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "service": "ursa-admin-api"}
+
+app.include_router(api.router)

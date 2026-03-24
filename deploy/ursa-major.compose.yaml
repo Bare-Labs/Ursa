@@ -1,0 +1,64 @@
+services:
+  c2:
+    image: ${URSA_IMAGE_NAME:-ursa-major:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - /usr/bin/python3
+      - /app/major/server.py
+      - --config
+      - /config/ursa.yaml
+    restart: unless-stopped
+    ports:
+      - "${URSA_PUBLISH_HOST:-127.0.0.1}:${URSA_C2_PORT:-18443}:8443"
+    volumes:
+      - type: bind
+        source: ${URSA_RUNTIME_DIR}/config
+        target: /config
+        read_only: true
+      - type: bind
+        source: ${URSA_RUNTIME_DIR}/data
+        target: /data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fkfsS https://127.0.0.1:8443/health >/dev/null || curl -fsS http://127.0.0.1:8443/health >/dev/null
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web:
+    image: ${URSA_IMAGE_NAME:-ursa-major:local}
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command:
+      - /usr/bin/python3
+      - -m
+      - major.web
+      - --config
+      - /config/ursa.yaml
+    restart: unless-stopped
+    depends_on:
+      c2:
+        condition: service_started
+    ports:
+      - "${URSA_PUBLISH_HOST:-127.0.0.1}:${URSA_WEB_PORT:-18080}:8080"
+    volumes:
+      - type: bind
+        source: ${URSA_RUNTIME_DIR}/config
+        target: /config
+        read_only: true
+      - type: bind
+        source: ${URSA_RUNTIME_DIR}/data
+        target: /data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:8080/healthz >/dev/null
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

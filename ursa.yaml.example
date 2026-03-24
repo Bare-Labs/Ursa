@@ -16,6 +16,8 @@ major:
   web:
     host: "0.0.0.0"
     port: 8080
+    auth:
+      api_token: ""               # Bearer token for BearClawWeb -> Ursa API calls
 
   # Defaults for new implant sessions
   implant_defaults:
