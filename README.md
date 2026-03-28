@@ -295,8 +295,6 @@ Ursa/
 ├── post/              # Post-exploitation modules
 ├── tests/             # Test suite
 ├── server.py          # MCP server entry point (Ursa Major)
-├── PLAN.md            # Short-term implementation plan
-├── ROADMAP.md         # Long-term feature roadmap
 └── README.md
 ```
 
@@ -304,8 +302,8 @@ Ursa/
 
 ## Roadmap and Planning
 
-- Near-term execution details: **[PLAN.md](PLAN.md)**
-- Broader direction and milestones: **[ROADMAP.md](ROADMAP.md)**
+- Active unfinished work for Ursa now lives in the workspace root `ROADMAP.md`.
+- Repo-specific historical and shipped changes belong in `CHANGELOG.md`.
 
 ---
 
