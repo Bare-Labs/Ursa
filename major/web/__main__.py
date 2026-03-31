@@ -1,4 +1,4 @@
-"""Run the Ursa Major BearClaw admin API.
+"""Run the Ursa Major control plane.
 
 Usage:
     python -m major.web [--port 8080] [--host 127.0.0.1] [--profile field]
@@ -13,7 +13,7 @@ from major.db import init_db
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Ursa Major BearClaw admin API")
+    parser = argparse.ArgumentParser(description="Ursa Major control plane")
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--host", default=None)
     parser.add_argument("--reload", action="store_true", help="Auto-reload on changes")
@@ -32,8 +32,9 @@ def main():
 
     init_db()
 
-    print("  URSA MAJOR — BearClaw Admin API")
+    print("  URSA MAJOR — Control Plane")
     print(f"  http://{host}:{port}")
+    print("  Routes: /healthz, /api/v1/*, /mcp")
     print()
 
     uvicorn.run(

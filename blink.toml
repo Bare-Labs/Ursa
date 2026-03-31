@@ -8,15 +8,15 @@ user            = "admin"
 base            = "/home/admin/barelabs"
 runtime_dir     = "/home/admin/barelabs/runtime/ursa-major"
 publish_host    = "192.168.86.53"
-c2_port         = "18443"
-web_port        = "18080"
+c2_port         = "6708"
+cp_port         = "6707"
 image_name      = "ursa-major:local"
 compose_project = "ursa-major"
 
 # Homelab network contract:
-#   - publish C2 on 192.168.86.53:18443
-#   - publish major.web on 192.168.86.53:18080 for BearClaw
-#   - keep deploying both c2 and web together; BearClaw Security depends on web
+#   - publish C2 on 192.168.86.53:6708
+#   - publish the Ursa control plane on 192.168.86.53:6707 for BearClaw and MCP
+#   - keep deploying both c2 and cp together; BearClaw Security depends on cp
 
 [services.ursa-major]
 description  = "Ursa Major C2 server on the blink homelab host"
@@ -46,7 +46,7 @@ command = "if [ -f {{runtime_dir}}/.env ] && [ -f {{runtime_dir}}/repo/deploy/ur
 dest = "runtime/ursa-major/staging/ursa-major-deploy.tgz"
 
 [services.ursa-major.start]
-command = "rm -rf {{runtime_dir}}/repo && mkdir -p {{runtime_dir}}/repo && tar -xzf {{runtime_dir}}/staging/ursa-major-deploy.tgz -C {{runtime_dir}}/repo && docker pull registry.home:5000/ursa-major:latest && docker tag registry.home:5000/ursa-major:latest ursa-major:local && docker compose --env-file {{runtime_dir}}/.env -f {{runtime_dir}}/repo/deploy/ursa-major.compose.yaml up -d c2 web"
+command = "rm -rf {{runtime_dir}}/repo && mkdir -p {{runtime_dir}}/repo && tar -xzf {{runtime_dir}}/staging/ursa-major-deploy.tgz -C {{runtime_dir}}/repo && docker pull registry.home:5000/ursa-major:latest && docker tag registry.home:5000/ursa-major:latest ursa-major:local && docker compose --env-file {{runtime_dir}}/.env -f {{runtime_dir}}/repo/deploy/ursa-major.compose.yaml up -d c2 cp"
 
 [services.ursa-major.health_check]
 url      = "https://{{publish_host}}:{{c2_port}}/health"
@@ -73,24 +73,24 @@ tags          = ["health"]
 [services.ursa-major.verify.tests.c2-port-published]
 type          = "shell"
 command       = "docker ps --filter name=^/ursa-major-c2-1$ --format '{{.Ports}}'"
-expect_output = '/192\.168\.86\.53:18443->8443\/tcp/'
+expect_output = '/192\.168\.86\.53:6708->8443\/tcp/'
 tags          = ["health"]
 
-[services.ursa-major.verify.tests.web-health]
+[services.ursa-major.verify.tests.cp-health]
 type          = "http"
-url           = "http://{{publish_host}}:{{web_port}}/healthz"
+url           = "http://{{publish_host}}:{{cp_port}}/healthz"
 expect_status = 200
-expect_body   = "ursa-admin-api"
+expect_body   = "ursa-major-control-plane"
 tags          = ["smoke", "health"]
 
-[services.ursa-major.verify.tests.web-port-published]
+[services.ursa-major.verify.tests.cp-port-published]
 type          = "shell"
-command       = "docker ps --filter name=^/ursa-major-web-1$ --format '{{.Ports}}'"
-expect_output = '/192\.168\.86\.53:18080->8080\/tcp/'
+command       = "docker ps --filter name=^/ursa-major-cp-1$ --format '{{.Ports}}'"
+expect_output = '/192\.168\.86\.53:6707->8080\/tcp/'
 tags          = ["health"]
 
-[services.ursa-major.verify.tests.web-container-running]
+[services.ursa-major.verify.tests.cp-container-running]
 type          = "shell"
-command       = "docker inspect --format '{{.State.Status}}' ursa-major-web-1 2>/dev/null"
+command       = "docker inspect --format '{{.State.Status}}' ursa-major-cp-1 2>/dev/null"
 expect_output = "running"
 tags          = ["health"]

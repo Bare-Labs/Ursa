@@ -1,4 +1,4 @@
-"""Web and API auth / RBAC helpers."""
+"""Control-plane auth / RBAC helpers."""
 
 from fastapi import Header, HTTPException, Request
 
@@ -46,15 +46,17 @@ def api_actor_for(user: dict, action: str) -> str:
     return f"api:{user.get('username', 'unknown')}:{action}"
 
 
-def require_api_role(
-    authorization: str | None = Header(default=None),
-    x_bearclaw_actor: str | None = Header(default=None),
-    x_bearclaw_role: str | None = Header(default=None),
+def authenticate_api_request(
+    authorization: str | None = None,
+    x_bearclaw_actor: str | None = None,
+    x_bearclaw_role: str | None = None,
     role: str = "admin",
+    *,
+    allow_missing_token: bool = False,
 ) -> dict:
-    """Authenticate a bearer-token API request and require minimum role."""
+    """Authenticate a bearer-token control-plane request and require minimum role."""
     expected = str(get_config().get("major.web.auth.api_token", "")).strip()
-    if not expected:
+    if not expected and not allow_missing_token:
         raise HTTPException(503, "API token is not configured")
 
     token = ""
@@ -62,7 +64,7 @@ def require_api_role(
         scheme, _, value = authorization.partition(" ")
         if scheme.lower() == "bearer":
             token = value.strip()
-    if token != expected:
+    if expected and token != expected:
         raise HTTPException(401, "Invalid API token")
 
     actor = (x_bearclaw_actor or "bearclaw-web").strip()
@@ -78,3 +80,18 @@ def require_api_role(
         "role": user_role,
         "is_active": True,
     }
+
+
+def require_api_role(
+    authorization: str | None = Header(default=None),
+    x_bearclaw_actor: str | None = Header(default=None),
+    x_bearclaw_role: str | None = Header(default=None),
+    role: str = "admin",
+) -> dict:
+    """Authenticate a bearer-token API request and require minimum role."""
+    return authenticate_api_request(
+        authorization=authorization,
+        x_bearclaw_actor=x_bearclaw_actor,
+        x_bearclaw_role=x_bearclaw_role,
+        role=role,
+    )

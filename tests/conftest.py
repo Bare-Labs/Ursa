@@ -16,12 +16,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "minor" / "src"))
 def tmp_db(tmp_path, monkeypatch):
     """Provide a fresh, isolated SQLite database for each test.
 
-    Patches major.db.DB_PATH so all db functions use a temp file.
+    Patches major.db._db_path so all db functions use a temp file.
     """
     import major.db as db_mod
 
     db_file = tmp_path / "test_ursa.db"
-    monkeypatch.setattr(db_mod, "DB_PATH", db_file)
+    monkeypatch.setattr(db_mod, "_db_path", lambda: db_file)
     db_mod.init_db()
     return db_file
 

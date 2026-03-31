@@ -62,8 +62,11 @@ Tools:
 
 Run with:
     /path/to/ursa/venv/bin/python3 server.py
+    /path/to/ursa/venv/bin/python3 server.py --transport streamable-http --host 127.0.0.1 --port 8765
+    # For the merged control-plane surface, prefer: python3 -m major.web --port 6707
 """
 
+import argparse
 import base64
 import csv
 import json
@@ -3346,4 +3349,38 @@ def ursa_results_report(
 
 
 if __name__ == "__main__":
-    mcp_server.run()
+    parser = argparse.ArgumentParser(description="Ursa Major MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default=os.environ.get("URSA_MCP_TRANSPORT", "stdio"),
+        help="MCP transport to use",
+    )
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("URSA_MCP_HOST", "127.0.0.1"),
+        help="Host to bind for streamable HTTP transport",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("URSA_MCP_PORT", "8765")),
+        help="Port to bind for streamable HTTP transport",
+    )
+    parser.add_argument(
+        "--streamable-http-path",
+        default=os.environ.get("URSA_MCP_STREAMABLE_HTTP_PATH", "/mcp"),
+        help="Path to expose for streamable HTTP transport",
+    )
+    args = parser.parse_args()
+
+    if args.transport == "streamable-http":
+        # FastMCP reads these values when building the HTTP app.
+        mcp_server.settings.host = args.host
+        mcp_server.settings.port = args.port
+        mcp_server.settings.streamable_http_path = args.streamable_http_path
+        print("  URSA MAJOR — MCP (streamable HTTP)")
+        print(f"  http://{args.host}:{args.port}{args.streamable_http_path}")
+        print()
+
+    mcp_server.run(transport=args.transport)

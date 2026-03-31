@@ -29,7 +29,11 @@ def web_client(tmp_db):
     from major.web.app import app
 
     # TestClient maintains a cookie jar across calls, enabling session auth.
-    with TestClient(app, raise_server_exceptions=True) as client:
+    with TestClient(
+        app,
+        raise_server_exceptions=True,
+        base_url="http://127.0.0.1:6707",
+    ) as client:
         yield client
 
 
@@ -481,6 +485,53 @@ class TestAuthMiddleware:
         # Static file may not exist, but should NOT be a 303 auth redirect
         resp = web_client.get("/static/nonexistent.css", follow_redirects=False)
         assert resp.status_code != 303
+
+    def test_mcp_route_reaches_control_plane_without_token_when_unconfigured(self, web_client):
+        resp = web_client.get(
+            "/mcp",
+            headers={"Accept": "application/json, text/event-stream"},
+            follow_redirects=False,
+        )
+        assert resp.status_code in {400, 406}
+        assert "mcp-session-id" in resp.headers
+
+    def test_mcp_route_requires_token_when_configured(self, web_client, monkeypatch):
+        class DummyConfig:
+            @staticmethod
+            def get(path, default=None):
+                if path == "major.web.auth.api_token":
+                    return "shared-token"
+                return default
+
+        monkeypatch.setattr("major.web.auth.get_config", lambda: DummyConfig())
+
+        resp = web_client.get(
+            "/mcp",
+            headers={"Accept": "application/json, text/event-stream"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 401
+
+    def test_mcp_route_accepts_valid_token_when_configured(self, web_client, monkeypatch):
+        class DummyConfig:
+            @staticmethod
+            def get(path, default=None):
+                if path == "major.web.auth.api_token":
+                    return "shared-token"
+                return default
+
+        monkeypatch.setattr("major.web.auth.get_config", lambda: DummyConfig())
+
+        resp = web_client.get(
+            "/mcp",
+            headers={
+                "Accept": "application/json, text/event-stream",
+                "Authorization": "Bearer shared-token",
+            },
+            follow_redirects=False,
+        )
+        assert resp.status_code in {400, 406}
+        assert "mcp-session-id" in resp.headers
 
 
 # ---------------------------------------------------------------------------

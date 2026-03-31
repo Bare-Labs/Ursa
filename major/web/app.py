@@ -1,5 +1,6 @@
-"""Ursa Major — BearClaw admin API service."""
+"""Ursa Major — control-plane service for BearClaw and MCP operators."""
 
+from contextlib import asynccontextmanager
 import json
 import re
 import sys
@@ -8,21 +9,23 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI
-from fastapi.responses import Response
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.types import Receive, Scope, Send
 from starlette.middleware.sessions import SessionMiddleware
 
 from major.config import get_config
 from major.db import get_user_by_id
+from major.web.auth import authenticate_api_request
 
 # Ensure project root is importable
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 WEB_DIR = Path(__file__).parent
 
-app = FastAPI(title="Ursa Major Admin API", docs_url=None, redoc_url=None)
+app = FastAPI(title="Ursa Major Control Plane", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 
 session_secret = str(get_config().get("major.web.auth.session_secret", "ursa-dev-session-secret"))
@@ -170,6 +173,44 @@ templates.env.globals["web_path"] = web_path
 # -- Register Routers --
 
 from major.web.routes import api  # noqa: E402
+from server import mcp_server as operator_mcp_server  # noqa: E402
+
+
+class ControlPlaneMCPProxy:
+    """Forward `/mcp` requests to the current FastMCP ASGI app."""
+
+    def __init__(self, parent_app: FastAPI):
+        self.parent_app = parent_app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        mcp_app = getattr(self.parent_app.state, "control_plane_mcp_app", None)
+        if mcp_app is None:
+            response = JSONResponse(
+                {"detail": "MCP control plane is starting"},
+                status_code=503,
+            )
+            await response(scope, receive, send)
+            return
+        await mcp_app(scope, receive, send)
+
+
+CONTROL_PLANE_MCP_APP = ControlPlaneMCPProxy(app)
+
+
+@asynccontextmanager
+async def control_plane_lifespan(_app):
+    # FastMCP's session manager is single-use, so the embedded control plane
+    # rebuilds a fresh ASGI app for each startup/lifespan cycle.
+    operator_mcp_server.settings.streamable_http_path = "/mcp"
+    operator_mcp_server.settings.transport_security = None
+    operator_mcp_server._session_manager = None
+    _app.state.control_plane_mcp_app = operator_mcp_server.streamable_http_app()
+    async with operator_mcp_server.session_manager.run():
+        yield
+    _app.state.control_plane_mcp_app = None
+
+
+app.router.lifespan_context = control_plane_lifespan
 
 
 @app.middleware("http")
@@ -179,6 +220,22 @@ async def auth_middleware(request, call_next):
     request.state.web_base_path = WEB_BASE_PATH
     request.state.web_path = web_path
     public_paths = {"/healthz"}
+    if path.startswith("/mcp"):
+        try:
+            request.state.user = authenticate_api_request(
+                authorization=request.headers.get("authorization"),
+                x_bearclaw_actor=request.headers.get("x-bearclaw-actor"),
+                x_bearclaw_role=request.headers.get("x-bearclaw-role"),
+                role="admin",
+                allow_missing_token=True,
+            )
+        except HTTPException as exc:
+            return await _apply_base_path(
+                JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+            )
+        response = await call_next(request)
+        return await _apply_base_path(response)
+
     if path.startswith("/api/") or path in public_paths:
         response = await call_next(request)
         return await _apply_base_path(response)
@@ -193,6 +250,7 @@ async def auth_middleware(request, call_next):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "service": "ursa-admin-api"}
+    return {"ok": True, "service": "ursa-major-control-plane"}
 
 app.include_router(api.router)
+app.mount("/", CONTROL_PLANE_MCP_APP)

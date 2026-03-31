@@ -2,53 +2,64 @@
 
 Command and control server — the C2 component of [Ursa](../README.md).
 
-Ursa Major is an HTTP-based C2 server that manages implant sessions, queues tasks, collects results, handles file transfers, and provides an admin API plus MCP interface for operators.
+Ursa Major is split into two published surfaces: a C2 listener for implants and a control-plane service for BearClaw plus MCP-based operators.
 
 ## Architecture
 
 ```
-Implant (beacon.py)          Ursa Major (major/server.py)         Operator
-      │                               │                              │
-      ├── POST /register ────────────►│  Create session + AES key    │
-      │                               │                              │
-      ├── POST /beacon ──────────────►│  Return pending tasks        │
-      │◄─── tasks (encrypted) ────────│                              │
-      │                               │                              │
-      │   [execute task locally]      │      MCP (server.py)         │
-      │                               │◄─────────────────────────────┤
-      ├── POST /result ──────────────►│  ursa_shell("whoami")        │
-      │                               │                              │
-      ├── POST /upload ──────────────►│  ursa_task_result(id)        │
-      │   (file exfiltration)         │─────────────────────────────►│
-      │                               │                              │
-      │◄── GET /download/<id> ────────│  Web UI (major/web/)         │
-      │   (file delivery)             │◄─────────────────────────────┤
-      │                               │  browser dashboard           │
+Implant (beacon.py)        Ursa Major C2            Ursa Major Control Plane
+      │                    (major/server.py)        (major.web)
+      │                               │                       │
+      ├── POST /register ────────────►│                       │
+      ├── POST /beacon ──────────────►│                       │
+      │◄─── tasks (encrypted) ────────│                       │
+      ├── POST /result ──────────────►│                       │
+      ├── POST /upload ──────────────►│                       │
+      │◄── GET /download/<id> ────────│                       │
+      │                               │                       │
+      │                               └──── shared DB/config ─┘
+      │                                                       │
+      │                                   BearClaw REST  ◄────┤  /api/v1/*
+      │                                   MCP operators ◄─────┤  /mcp
 ```
 
 ## Running
 
 ### Via MCP (recommended)
 
-The MCP server (`server.py` at project root) manages the C2 lifecycle — Claude can start/stop it with `ursa_start_c2` and `ursa_stop_c2`.
+The control-plane service (`python3 -m major.cp`) now exposes the operator MCP surface on the same port as the BearClaw REST API.
+
+For local Codex-style usage, run:
+
+```bash
+python3 -m major.cp --host 127.0.0.1 --port 6707
+```
+
+That exposes:
+- REST: `http://127.0.0.1:6707/api/v1/*`
+- MCP: `http://127.0.0.1:6707/mcp`
+
+The root [`server.py`](/Users/joecaruso/Projects/BareSystems/Ursa/server.py) still exists as the standalone stdio MCP entrypoint for local operator tooling.
 
 ### Standalone
 
 ```bash
-python3 major/server.py                    # Default: 0.0.0.0:8443
-python3 major/server.py --port 9000        # Custom port
-python3 major/server.py --host 127.0.0.1   # Localhost only
-python3 major/server.py --tls              # Enable HTTPS (auto-generates cert)
+python3 -m major.c2                        # Default: 0.0.0.0:8443
+python3 -m major.c2 --port 9000            # Custom port
+python3 -m major.c2 --host 127.0.0.1       # Localhost only
+python3 -m major.c2 --tls                  # Enable HTTPS (auto-generates cert)
 ```
 
 ### BearClaw Admin API
 
 ```bash
-python3 -m major.web                       # Default: http://0.0.0.0:8080
+python3 -m major.cp                        # Default: http://0.0.0.0:8080
 ```
 
-The service now exposes the bearer-authenticated BearClaw admin API on
-`/api/v1/*` plus a lightweight health endpoint at `/healthz`.
+The control-plane service exposes:
+- BearClaw REST endpoints on `/api/v1/*`
+- operator MCP on `/mcp`
+- health on `/healthz`
 
 ### Docker Compose
 
@@ -57,7 +68,7 @@ docker compose --env-file .runtime/ursa-major/.env \
   -f deploy/ursa-major.compose.yaml up -d --build
 ```
 
-The compose stack runs the C2 listener and admin API from the same image, with a
+The compose stack runs the C2 listener and control plane from the same image, with a
 shared `config/ursa.yaml` and `data/` directory for SQLite and TLS material.
 
 ### Blink Deploy
@@ -76,13 +87,14 @@ blink test ursa-major --tags smoke
 ```
 
 The default homelab publish targets are:
-- Admin API health: `http://192.168.86.53:18080/healthz`
-- C2 API: `https://192.168.86.53:18443/health`
+- Control-plane health: `http://192.168.86.53:6707/healthz`
+- Control-plane MCP: `http://192.168.86.53:6707/mcp`
+- C2 API: `https://192.168.86.53:6708/health`
 
-The BearClaw-facing admin API owns port `18080`. BearClawWeb is the only
-operator UI. Direct browser use of `major.web` routes is intentionally disabled
-and returns HTTP `410 Gone`, but the service itself remains required as the
-experience/API layer for BearClaw.
+The BearClaw-facing control plane owns port `6707`. BearClawWeb is the only
+operator UI. Direct browser use of non-API control-plane routes remains
+disabled, but the service itself is the required REST + MCP facade over the
+Ursa datastore.
 
 ### Configuration
 
@@ -96,7 +108,7 @@ major:
     enabled: true
     hostname: c2.example.com    # SAN for the self-signed cert
   web:
-    base_path: /ursa            # optional reverse-proxy mount path for the admin API service
+    base_path: /ursa            # optional reverse-proxy mount path for the control-plane service
     auth:
       api_token: your-shared-bearclaw-token
   auto_recon:
@@ -130,13 +142,14 @@ major:
 | `GET` | `/stage` | Serve the stager payload for initial delivery |
 | `GET` | `/health` | Health check |
 
-### BearClaw Admin API
+### Ursa Control Plane
 
 BearClawWeb consumes Ursa over bearer-authenticated JSON endpoints under `/api/v1/*`.
+Direct agent clients consume the same control-plane service over `/mcp`.
 
-`major.web` should be treated as the Ursa admin API service. It is not the
-operator product surface, but it is the supported facade between BearClawWeb
-and the Ursa C2 datastore.
+`major.web` should be treated as the Ursa control-plane service. It is not the
+operator product surface, but it is the supported REST + MCP facade between
+BearClaw/MCP clients and the Ursa datastore.
 
 Required config:
 

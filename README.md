@@ -81,7 +81,7 @@ If you want a single project that can be driven conversationally by an AI assist
 
 | Component | Purpose | Docs |
 |-----------|---------|------|
-| **[Ursa Major](major/)** | Command and control: sessions, tasking, encrypted comms, admin API, governance, and campaign ops | [major/README.md](major/README.md) |
+| **[Ursa Major](major/)** | Command and control: sessions, tasking, encrypted comms, control plane, governance, and campaign ops | [major/README.md](major/README.md) |
 | **[Ursa Minor](minor/)** | Recon/scanning and host-triage suite with 20 tools (network, web, creds, SMB/SNMP, hash, defensive baselines) | [minor/README.md](minor/README.md) |
 | **[Implants](implants/)** | Beacon templates (Python/Go/Zig), stager, evasion helpers, payload builder | [implants/README.md](implants/README.md) |
 | **[Post modules](post/)** | Post-exploitation modules (enum, creds, lateral movement, persistence) | — |
@@ -134,13 +134,13 @@ pip install ./minor
 
 ```bash
 # Start C2 (default 0.0.0.0:8443)
-python3 major/server.py
+python3 -m major.c2
 
-# Start BearClaw-facing admin API service (default 0.0.0.0:8080)
-python3 -m major.web
+# Start the Ursa control plane (REST on /api/v1/*, MCP on /mcp)
+python3 -m major.cp
 ```
 
-Bootstrap credentials for the admin API service (change before any non-local deployment):
+Bootstrap credentials for the control-plane service (change before any non-local deployment):
 - Username: `admin`
 - Password: `change-me-now`
 
@@ -148,13 +148,13 @@ Bootstrap credentials for the admin API service (change before any non-local dep
 
 On `blink`, Ursa has two distinct published surfaces:
 
-- C2 listener: `https://192.168.86.53:18443`
-- BearClaw-facing admin API (`major.web`): `http://192.168.86.53:18080`
+- C2 listener: `https://192.168.86.53:6708`
+- BearClaw-facing control plane (`major.web`): `http://192.168.86.53:6707`
 
 BearClaw Security depends on `major.web`, not on the raw C2 listener. Do not
 remove, retire, or stop deploying `major.web` while BearClaw Security pages
 still exist. When BearClaw runs in Docker, it must call the host-published
-admin API address, not host loopback from inside the container.
+control-plane address, not host loopback from inside the container.
 
 ---
 
@@ -182,7 +182,33 @@ major:
 
 ---
 
-## MCP Setup (Claude Code / Desktop)
+## MCP Setup (Codex / Claude Code / Desktop)
+
+### Codex (`~/.codex/config.toml`)
+
+Ursa Minor can run over stdio, while Ursa Major exposes MCP through the control
+plane service.
+
+1. Start the Ursa control plane locally:
+
+```bash
+/path/to/Ursa/.venv/bin/python3 -m major.cp \
+  --host 127.0.0.1 \
+  --port 6707
+```
+
+2. Add both servers to Codex:
+
+```toml
+[mcp_servers.ursa_major]
+url = "http://127.0.0.1:6707/mcp"
+
+[mcp_servers.ursa_minor]
+command = "/path/to/Ursa/.venv/bin/python3"
+args = ["/path/to/Ursa/minor/server.py"]
+```
+
+Restart Codex after updating the config so the new MCP entries are loaded.
 
 Add both MCP servers to your Claude config.
 
@@ -232,7 +258,7 @@ Ursa Major is an HTTP-based C2 server with:
 - 13 core task types (`shell`, `sysinfo`, `download`, `upload`, `sleep`, `kill`, `post`, etc.)
 - Per-session encrypted communications (AES-256-CTR + HMAC-SHA256)
 - Optional TLS and traffic profiles
-- BearClaw-facing admin API service with bearer auth plus bootstrap web auth config
+- BearClaw-facing control-plane service with bearer auth plus bootstrap web auth config
 - 60+ MCP tools for operations, governance, and campaign workflows
 
 For full API/tooling details: **[major/README.md](major/README.md)**
@@ -289,7 +315,7 @@ This makes Ursa suitable for structured team operations where traceability matte
 
 ```text
 Ursa/
-├── major/             # C2 server, governance, and BearClaw-facing admin API logic
+├── major/             # C2 server, governance, and BearClaw-facing control-plane logic
 ├── minor/             # Recon/scanning toolkit
 ├── implants/          # Beacon templates, stager, evasion, builder
 ├── post/              # Post-exploitation modules
