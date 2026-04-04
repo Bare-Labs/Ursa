@@ -44,7 +44,7 @@ The root [`server.py`](/Users/joecaruso/Projects/BareSystems/Ursa/server.py) sti
 ### Standalone
 
 ```bash
-python3 -m major.c2                        # Default: 0.0.0.0:8443
+python3 -m major.c2                        # Default: 0.0.0.0:6708
 python3 -m major.c2 --port 9000            # Custom port
 python3 -m major.c2 --host 127.0.0.1       # Localhost only
 python3 -m major.c2 --tls                  # Enable HTTPS (auto-generates cert)
@@ -102,7 +102,7 @@ Create a `ursa.yaml` at the project root to override defaults:
 
 ```yaml
 major:
-  port: 8443
+  port: 6708
   traffic_profile: jquery       # default | jquery | office365 | github-api
   tls:
     enabled: true
@@ -125,7 +125,7 @@ major:
   redirector:
     enabled: true
     listen_port: 80
-    upstream_url: http://127.0.0.1:8443
+    upstream_url: http://127.0.0.1:6708
     allowed_paths: [/jquery/]
     user_agent_filter: ""
 ```

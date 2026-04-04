@@ -5,13 +5,14 @@ services:
       context: ..
       dockerfile: Dockerfile
     command:
-      - /usr/bin/python3
+      - /usr/local/bin/python3
       - /app/major/server.py
       - --config
       - /config/ursa.yaml
+    container_name: ursa-major-c2
     restart: unless-stopped
     ports:
-      - "${URSA_PUBLISH_HOST:-127.0.0.1}:${URSA_C2_PORT:-6708}:8443"
+      - "${URSA_PUBLISH_HOST:-127.0.0.1}:${URSA_C2_PORT:-6708}:${URSA_C2_PORT:-6708}"
     volumes:
       - type: bind
         source: ${URSA_RUNTIME_DIR}/config
@@ -23,7 +24,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - curl -fkfsS https://127.0.0.1:8443/health >/dev/null || curl -fsS http://127.0.0.1:8443/health >/dev/null
+        - curl -fkfsS https://127.0.0.1:6708/health >/dev/null || curl -fsS http://127.0.0.1:6708/health >/dev/null
       interval: 30s
       timeout: 5s
       retries: 5
@@ -35,17 +36,18 @@ services:
       context: ..
       dockerfile: Dockerfile
     command:
-      - /usr/bin/python3
+      - /usr/local/bin/python3
       - -m
       - major.web
       - --config
       - /config/ursa.yaml
+    container_name: ursa-major-cp
     restart: unless-stopped
     depends_on:
       c2:
         condition: service_started
     ports:
-      - "${URSA_PUBLISH_HOST:-127.0.0.1}:${URSA_CP_PORT:-6707}:8080"
+      - "${URSA_PUBLISH_HOST:-127.0.0.1}:${URSA_CP_PORT:-6707}:${URSA_CP_PORT:-6707}"
     volumes:
       - type: bind
         source: ${URSA_RUNTIME_DIR}/config
@@ -57,7 +59,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - curl -fsS http://127.0.0.1:8080/healthz >/dev/null
+        - curl -fsS http://127.0.0.1:6707/healthz >/dev/null
       interval: 30s
       timeout: 5s
       retries: 5

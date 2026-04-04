@@ -1,29 +1,29 @@
 {
-  "updated_at": "2026-03-21T01:24:27Z",
+  "updated_at": "2026-03-31T17:24:44Z",
   "services": {
     "ursa-major": {
-      "last_run_id": "20260321T012424Z-471f430e",
+      "last_run_id": "20260331T172350Z-1bf70c2d",
       "last_run": {
-        "run_id": "20260321T012424Z-471f430e",
+        "run_id": "20260331T172350Z-1bf70c2d",
         "service": "ursa-major",
-        "operation": "test",
+        "operation": "deploy",
         "status": "success",
-        "started_at": "2026-03-21T01:24:24Z",
-        "completed_at": "2026-03-21T01:24:27Z",
-        "summary": "9/9 passed"
+        "started_at": "2026-03-31T17:23:50Z",
+        "completed_at": "2026-03-31T17:24:44Z",
+        "summary": "Deploy succeeded"
       },
       "last_test": {
-        "run_id": "20260321T012424Z-471f430e",
-        "completed_at": "2026-03-21T01:24:27Z",
-        "target": "ssh://admin@blink",
+        "run_id": "20260331T172326Z-b8f73808",
+        "completed_at": "2026-03-31T17:23:26Z",
+        "target": "ssh://admin@beelink",
         "tags": [],
-        "summary": "9/9 passed",
-        "success": true,
+        "summary": "0/9 passed, 3 failed, 6 errored",
+        "success": false,
         "result": {
-          "success": true,
-          "passed": 9,
-          "failed": 0,
-          "errored": 0,
+          "success": false,
+          "passed": 0,
+          "failed": 3,
+          "errored": 6,
           "skipped": 0,
           "total": 9,
           "tests": [
@@ -34,9 +34,9 @@
                 "smoke",
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.246,
-              "message": null
+              "status": "fail",
+              "elapsed": 0.009,
+              "message": "expected HTTP 200, got 0\n  body: curl/target error: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
               "name": "c2-container-running",
@@ -44,9 +44,9 @@
               "tags": [
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.268,
-              "message": null
+              "status": "error",
+              "elapsed": 0.005,
+              "message": "Blink::SSHError: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
               "name": "c2-port-published",
@@ -54,40 +54,40 @@
               "tags": [
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.263,
-              "message": null
+              "status": "error",
+              "elapsed": 0.005,
+              "message": "Blink::SSHError: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
-              "name": "web-health",
+              "name": "cp-health",
               "suite": "ursa-major:inline",
               "tags": [
                 "smoke",
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.243,
-              "message": null
+              "status": "fail",
+              "elapsed": 0.008,
+              "message": "expected HTTP 200, got 0\n  body: curl/target error: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
-              "name": "web-port-published",
+              "name": "cp-port-published",
               "suite": "ursa-major:inline",
               "tags": [
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.257,
-              "message": null
+              "status": "error",
+              "elapsed": 0.007,
+              "message": "Blink::SSHError: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
-              "name": "web-container-running",
+              "name": "cp-container-running",
               "suite": "ursa-major:inline",
               "tags": [
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.209,
-              "message": null
+              "status": "error",
+              "elapsed": 0.008,
+              "message": "Blink::SSHError: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
               "name": "c2 health endpoint returns healthy json",
@@ -96,9 +96,9 @@
                 "smoke",
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.223,
-              "message": null
+              "status": "fail",
+              "elapsed": 0.006,
+              "message": "expected HTTP 200, got 0\n     body: curl/target error: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
               "name": "c2 container is running",
@@ -106,9 +106,9 @@
               "tags": [
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.238,
-              "message": null
+              "status": "error",
+              "elapsed": 0.006,
+              "message": "Blink::SSHError: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             },
             {
               "name": "c2 port is published on the lan address",
@@ -116,29 +116,29 @@
               "tags": [
                 "health"
               ],
-              "status": "pass",
-              "elapsed": 0.245,
-              "message": null
+              "status": "error",
+              "elapsed": 0.007,
+              "message": "Blink::SSHError: Remote capture failed: ssh: connect to host 192.168.86.53 port 22: Operation not permitted"
             }
           ]
         }
       },
-      "last_successful_run_id": "20260321T012108Z-a4e76e91",
+      "last_successful_run_id": "20260331T172350Z-1bf70c2d",
       "last_deploy": {
-        "run_id": "20260321T012108Z-a4e76e91",
-        "completed_at": "2026-03-21T01:21:32Z",
-        "target": "ssh://admin@blink",
+        "run_id": "20260331T172350Z-1bf70c2d",
+        "completed_at": "2026-03-31T17:24:44Z",
+        "target": "ssh://admin@beelink",
         "target_name": "homelab",
         "version": "latest",
         "build_name": null,
         "summary": "Deploy succeeded",
         "artifact": {
-          "path": "/Users/joecaruso/Projects/BareSystems/Ursa/.blink/artifacts/ursa-major/beb40cec7398ff734c9571d69befcef2bcfc5f15f3819db51a43f1c7de6a322c-ursa-major-repo.tgz",
-          "sha256": "2c28f7d364d8ec4a5e7d99e59e66491d0def79369fd7b98429996cbbe1713211",
-          "size": 19720859,
+          "path": "/Users/joecaruso/Projects/BareSystems/Ursa/.blink/artifacts/ursa-major/3aebf1d5e7723a640374f1e0927aa63deb9b137e8168ba6b16fa5d241b5d6aa4-ursa-major-deploy.tgz",
+          "sha256": "245938d8e07f57d3f790cd9bccc07388dff4b22af77fd9148c8dbe07b2b61edd",
+          "size": 2117,
           "cached": true,
           "source_type": "containerized_local_build",
-          "cache_key": "beb40cec7398ff734c9571d69befcef2bcfc5f15f3819db51a43f1c7de6a322c",
+          "cache_key": "3aebf1d5e7723a640374f1e0927aa63deb9b137e8168ba6b16fa5d241b5d6aa4",
           "http": null,
           "integrity": null,
           "signature": null,
@@ -146,18 +146,18 @@
           "cache": {
             "source_type": "containerized_local_build",
             "version": "latest",
-            "image": "alpine:3.20",
+            "image": "docker:cli",
             "workdir": "/workspace",
-            "cache_key": "beb40cec7398ff734c9571d69befcef2bcfc5f15f3819db51a43f1c7de6a322c",
-            "created_at": "2026-03-21T01:21:12Z"
+            "cache_key": "3aebf1d5e7723a640374f1e0927aa63deb9b137e8168ba6b16fa5d241b5d6aa4",
+            "created_at": "2026-03-31T17:24:26Z"
           }
         },
         "git": {
-          "commit": "a1a83ac126efd3b93c7e5b6fa73721ec09b5e88d",
+          "commit": "9fe8b88c51d17f7d89688b1430ac8131725086b1",
           "ref": "main",
           "dirty": true
         },
-        "config_hash": "7708f59ee3cd241f0dde6ca585a798c4219f1d6d2096ec80a55a5af4b5858612"
+        "config_hash": "ae17a868640b5529637b874fd0997e8960ee4f7e2c07ecfd00899128024bd0b7"
       }
     }
   }

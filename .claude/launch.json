@@ -5,7 +5,7 @@
       "name": "ursa-major-web",
       "runtimeExecutable": ".claude/scripts/ursa-preview.sh",
       "runtimeArgs": [],
-      "port": 18080
+      "port": 6707
     }
   ]
 }

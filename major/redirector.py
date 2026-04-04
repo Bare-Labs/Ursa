@@ -11,7 +11,7 @@ security by:
 Architecture
 ------------
 
-    [Implant] ──POST /beacon──► [Redirector :80] ──► [C2 :8443]
+    [Implant] ──POST /beacon──► [Redirector :80] ──► [C2 :6708]
                                         │
                       (non-matching requests → decoy response)
 
@@ -25,7 +25,7 @@ Usage
     cfg = RedirectorConfig(
         listen_host="0.0.0.0",
         listen_port=80,
-        upstream_url="https://10.0.0.1:8443",
+        upstream_url="https://10.0.0.1:6708",
         # Optional allow-list — only forward requests matching these paths
         allowed_paths=["/beacon", "/register", "/result", "/upload"],
         # Optional: require implants to include this User-Agent fragment
@@ -46,7 +46,7 @@ Config via ursa.yaml
         enabled: true
         listen_host: "0.0.0.0"
         listen_port: 80
-        upstream_url: "https://10.0.0.1:8443"
+        upstream_url: "https://10.0.0.1:6708"
         allowed_paths: []          # empty = forward everything
         user_agent_filter: ""      # empty = allow any UA
         verify_tls: false          # set true if upstream has a valid cert
@@ -82,7 +82,7 @@ class RedirectorConfig:
     listen_port: int = 80
 
     # Upstream C2 URL — all matched requests are forwarded here
-    upstream_url: str = "http://127.0.0.1:8443"
+    upstream_url: str = "http://127.0.0.1:6708"
 
     # If non-empty, only forward requests whose path starts with one of these.
     # All other requests receive the decoy response.
@@ -312,7 +312,7 @@ def redirector_from_config(cfg) -> Redirector | None:
           redirector:
             enabled: true
             listen_port: 80
-            upstream_url: "https://10.0.0.1:8443"
+            upstream_url: "https://10.0.0.1:6708"
     """
     if not cfg.get("major.redirector.enabled", False):
         return None
@@ -320,7 +320,7 @@ def redirector_from_config(cfg) -> Redirector | None:
     rcfg = RedirectorConfig(
         listen_host=cfg.get("major.redirector.listen_host", "0.0.0.0"),
         listen_port=cfg.get("major.redirector.listen_port", 80),
-        upstream_url=cfg.get("major.redirector.upstream_url", "http://127.0.0.1:8443"),
+        upstream_url=cfg.get("major.redirector.upstream_url", "http://127.0.0.1:6708"),
         allowed_paths=cfg.get("major.redirector.allowed_paths", []),
         user_agent_filter=cfg.get("major.redirector.user_agent_filter", ""),
         verify_tls=cfg.get("major.redirector.verify_tls", False),

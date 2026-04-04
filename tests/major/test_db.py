@@ -186,10 +186,10 @@ class TestFiles:
 class TestListeners:
 
     def test_create_listener(self, tmp_db):
-        lid = db.create_listener("http-main", 8443)
+        lid = db.create_listener("http-main", 6708)
         listener = db.get_listener(listener_id=lid)
         assert listener["name"] == "http-main"
-        assert listener["bind_port"] == 8443
+        assert listener["bind_port"] == 6708
 
     def test_get_listener_by_name(self, tmp_db):
         db.create_listener("https-alt", 9443)

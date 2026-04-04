@@ -22,4 +22,6 @@ RUN apt-get update \
 
 COPY . /app
 
-EXPOSE 8443 8080
+RUN pip install --no-cache-dir --break-system-packages .
+
+EXPOSE 6708 6707

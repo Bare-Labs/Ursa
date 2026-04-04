@@ -21,7 +21,7 @@ All comms are encrypted with per-session AES keys after registration.
 HTTP looks like normal web traffic (JSON API responses).
 
 Run:
-    python3 major/server.py [--port 8443] [--host 0.0.0.0] [--tls] [--profile jquery]
+    python3 major/server.py [--port 6708] [--host 0.0.0.0] [--tls] [--profile jquery]
 """
 
 import argparse
@@ -64,7 +64,7 @@ from major.db import (
 # ── Configuration (loaded from ursa.yaml with defaults) ──
 
 _cfg = get_config()
-DEFAULT_PORT = _cfg.get("major.port", 8443)
+DEFAULT_PORT = _cfg.get("major.port", 6708)
 DEFAULT_HOST = _cfg.get("major.host", "0.0.0.0")
 STALE_THRESHOLD = _cfg.get("major.stale_threshold", 300)
 SERVER_HEADER = _cfg.get("major.server_header", "nginx/1.24.0")

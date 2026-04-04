@@ -1,8 +1,0 @@
-{
-  "source_type": "containerized_local_build",
-  "version": "latest",
-  "image": "alpine:3.20",
-  "workdir": "/workspace",
-  "cache_key": "beb40cec7398ff734c9571d69befcef2bcfc5f15f3819db51a43f1c7de6a322c",
-  "created_at": "2026-03-21T01:21:12Z"
-}

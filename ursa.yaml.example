@@ -6,7 +6,7 @@
 major:
   # C2 server
   host: "0.0.0.0"
-  port: 8443
+  port: 6708
   db_path: "major/ursa.db"         # Relative to project root, or absolute path
   stale_threshold: 300              # Seconds before a session is marked stale
   reaper_interval: 30               # Seconds between reaper checks
@@ -15,7 +15,7 @@ major:
   # Web UI
   web:
     host: "0.0.0.0"
-    port: 8080
+    port: 6707
     auth:
       api_token: ""               # Bearer token for BearClawWeb -> Ursa API calls
 
@@ -57,7 +57,7 @@ minor:
 #
 #   lab:
 #     major:
-#       port: 8443
+#       port: 6708
 #       web:
 #         port: 9090
 #

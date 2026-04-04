@@ -17,7 +17,7 @@
 // -----------
 //   python -m implants.builder build \
 //       --template http_go \
-//       --c2 http://10.0.0.1:8443 \
+//       --c2 http://10.0.0.1:6708 \
 //       --output /tmp/agent.go \
 //       --post-build "go build -o {binary} {output}"
 //

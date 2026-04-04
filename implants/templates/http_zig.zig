@@ -9,7 +9,7 @@
 // -----
 //   python -m implants.builder build \
 //       --template http_zig \
-//       --c2 http://10.0.0.1:8443 \
+//       --c2 http://10.0.0.1:6708 \
 //       --output /tmp/agent.zig \
 //       --post-build "zig build-exe {output} -femit-bin={binary}"
 //
@@ -62,7 +62,7 @@ const std = @import("std");
 
 // ── Config (substituted by builder at build time) ────────────────────────────
 // After build these become e.g.:
-//   const C2_URL: []const u8 = "http://10.0.0.1:8443";
+//   const C2_URL: []const u8 = "http://10.0.0.1:6708";
 //   const BEACON_INTERVAL: u64 = 5;
 //   const BEACON_JITTER: f64 = 0.1;
 

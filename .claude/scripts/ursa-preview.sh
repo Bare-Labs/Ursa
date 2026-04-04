@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Deploy Ursa Major to blink, then SSH-tunnel the web UI back to localhost:18080
-# so Claude Preview can inspect it at http://localhost:18080
+# Deploy Ursa Major to blink, then SSH-tunnel the web UI back to localhost:6707
+# so Claude Preview can inspect it at http://localhost:6707
 #
-# A placeholder HTTP server holds port 18080 open immediately so the preview
+# A placeholder HTTP server holds port 6707 open immediately so the preview
 # tool doesn't time out during the Docker build.
 
 set -euo pipefail
 
-PORT="${BLINK_URSA_WEB_PORT:-18080}"
+PORT="${BLINK_URSA_WEB_PORT:-6707}"
 SSH_HOST="${BLINK_SSH_HOST:-blink}"
 
 cleanup() {

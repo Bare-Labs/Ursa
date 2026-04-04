@@ -34,7 +34,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 DEFAULTS = {
     "major": {
         "host": "0.0.0.0",
-        "port": 8443,
+        "port": 6708,
         "db_path": str(PROJECT_ROOT / "major" / "ursa.db"),
         "stale_threshold": 300,
         "reaper_interval": 30,
@@ -77,7 +77,7 @@ DEFAULTS = {
             "listen_host": "0.0.0.0",
             "listen_port": 80,
             # Where to forward matched traffic (your actual C2)
-            "upstream_url": "http://127.0.0.1:8443",
+            "upstream_url": "http://127.0.0.1:6708",
             # Only forward requests matching these path prefixes
             # Empty list = forward everything
             "allowed_paths": [],
@@ -135,7 +135,7 @@ class UrsaConfig:
         self._data = data
 
     def get(self, path: str, default=None):
-        """Get a value by dotted path: cfg.get('major.port', 8443)"""
+        """Get a value by dotted path: cfg.get('major.port', 6708)"""
         keys = path.split(".")
         current = self._data
         for key in keys:

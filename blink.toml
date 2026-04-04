@@ -27,14 +27,13 @@ type          = "containerized_local_build"
 image         = "docker:cli"
 mount         = ".:/workspace"
 workdir       = "/workspace"
-command       = "docker buildx build --platform linux/amd64 --load -t ursa-major:local . && docker tag ursa-major:local registry.home/ursa-major:latest && docker push registry.home/ursa-major:latest && mkdir -p dist && tar -czf dist/ursa-major-deploy.tgz deploy/"
+command       = "docker buildx build --platform linux/amd64 --load -t ursa-major:local . && docker tag ursa-major:local registry.home:5000/ursa-major:latest && docker push registry.home:5000/ursa-major:latest && mkdir -p dist && tar -czf dist/ursa-major-deploy.tgz deploy/"
 artifact      = "dist/ursa-major-deploy.tgz"
 docker_socket = true
 
 [services.ursa-major.deploy]
 target            = "homelab"
 pipeline          = ["fetch_artifact", "remote_script", "stop", "backup", "install", "start", "health_check", "verify"]
-rollback_pipeline = ["stop", "rollback", "start", "health_check", "verify"]
 
 [services.ursa-major.remote_script]
 path = "deploy/blink/provision_ursa_major.sh"
@@ -66,14 +65,14 @@ tags          = ["smoke", "health"]
 
 [services.ursa-major.verify.tests.c2-container-running]
 type          = "shell"
-command       = "docker inspect --format '{{.State.Status}}' ursa-major-c2-1 2>/dev/null"
+command       = "docker inspect --format '{{.State.Status}}' ursa-major-c2 2>/dev/null"
 expect_output = "running"
 tags          = ["health"]
 
 [services.ursa-major.verify.tests.c2-port-published]
 type          = "shell"
-command       = "docker ps --filter name=^/ursa-major-c2-1$ --format '{{.Ports}}'"
-expect_output = '/192\.168\.86\.53:6708->8443\/tcp/'
+command       = "docker ps --filter name=^/ursa-major-c2$ --format '{{.Ports}}'"
+expect_output = '/192\.168\.86\.53:6708->6708\/tcp/'
 tags          = ["health"]
 
 [services.ursa-major.verify.tests.cp-health]
@@ -85,12 +84,65 @@ tags          = ["smoke", "health"]
 
 [services.ursa-major.verify.tests.cp-port-published]
 type          = "shell"
-command       = "docker ps --filter name=^/ursa-major-cp-1$ --format '{{.Ports}}'"
-expect_output = '/192\.168\.86\.53:6707->8080\/tcp/'
+command       = "docker ps --filter name=^/ursa-major-cp$ --format '{{.Ports}}'"
+expect_output = '/192\.168\.86\.53:6707->6707\/tcp/'
 tags          = ["health"]
 
 [services.ursa-major.verify.tests.cp-container-running]
 type          = "shell"
-command       = "docker inspect --format '{{.State.Status}}' ursa-major-cp-1 2>/dev/null"
+command       = "docker inspect --format '{{.State.Status}}' ursa-major-cp 2>/dev/null"
 expect_output = "running"
 tags          = ["health"]
+
+# ── Log aliases ───────────────────────────────────────────────────────────────
+# Use `blink logs ursa-c2` and `blink logs ursa-cp` to tail each container.
+# `blink deploy ursa-c2` / `blink deploy ursa-cp` prints current container status.
+
+[services.ursa-c2]
+description  = "Ursa Major C2 — log access"
+service_name = "ursa-major-c2"
+
+[services.ursa-c2.deploy]
+target   = "homelab"
+pipeline = ["shell"]
+
+[services.ursa-c2.shell]
+command = "echo '--- ursa.yaml ---' && cat {{runtime_dir}}/config/ursa.yaml && echo '--- port 6708 listener ---' && ss -tlnp 'sport = :6708' 2>/dev/null || netstat -tlnp 2>/dev/null | grep 6708 && echo '--- docker ps ---' && docker ps -a --filter name=ursa-major && echo '--- c2 logs ---' && docker logs --tail 60 ursa-major-c2-1 2>&1 || docker logs --tail 60 ursa-major-c2 2>&1 || echo 'no container'"
+
+[services.ursa-c2.verify]
+tags = ["diag"]
+
+[services.ursa-c2.verify.tests.yaml-port]
+type          = "shell"
+command       = "python3 -c \"import json; d=json.load(open('{{runtime_dir}}/config/ursa.yaml')); print(d.get('major',{}).get('port','NOT_SET'))\""
+expect_output = "6708"
+tags          = ["diag"]
+
+[services.ursa-c2.verify.tests.host-port-listening]
+type          = "shell"
+command       = "ss -tlnp | grep ':6708' || echo 'NOT_LISTENING'"
+expect_output = "6708"
+tags          = ["diag"]
+
+[services.ursa-c2.verify.tests.c2-container-state]
+type          = "shell"
+command       = "docker ps -a --filter name=ursa-major-c2 --format '{{.Names}} {{.Status}} {{.Ports}}'"
+expect_output = "ursa-major"
+tags          = ["diag"]
+
+[services.ursa-c2.verify.tests.c2-startup-logs]
+type          = "shell"
+command       = "(docker logs --tail 30 ursa-major-c2 2>&1 || docker logs --tail 30 ursa-major-c2-1 2>&1 || echo 'no_container') | strings | head -40"
+expect_output = "Listening"
+tags          = ["diag"]
+
+[services.ursa-cp]
+description  = "Ursa Major control plane — log access"
+service_name = "ursa-major-cp"
+
+[services.ursa-cp.deploy]
+target   = "homelab"
+pipeline = ["shell"]
+
+[services.ursa-cp.shell]
+command = "docker logs --tail 80 ursa-major-cp 2>/dev/null || docker logs --tail 80 ursa-major-cp-1 2>/dev/null || echo 'no container found'"

