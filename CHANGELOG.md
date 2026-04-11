@@ -4,6 +4,12 @@ All notable changes to Ursa are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Slow builds on Apple Silicon** — Rewrote the Dockerfile as a two-stage build. Stage 1 runs natively on the build machine (`$BUILDPLATFORM`) and uses `pip download` to fetch pre-built `manylinux2014_x86_64` wheels without any QEMU emulation. Stage 2 installs from those local wheels — no compilation, no network — so even the first build is fast. Also added `dist/`, `deploy/`, and `*.tgz` to `.dockerignore` to eliminate deploy artifact bloat from the build context.
+- **Missing rollback pipeline** — Added `rollback_pipeline = ["stop", "start", "health_check"]` to the `ursa-major` deploy config. Previously a failed deploy had no automated recovery path.
+- **Dockerfile layer caching** — Rewrote the Dockerfile to separate dependency installation from source copying. `pyproject.toml` is copied first; stubs are used to install all deps into a cached layer; real source is copied second and installed with `--no-deps`. This eliminates the redundant apt-then-pip double-install pattern and ensures dep layers are only rebuilt when `pyproject.toml` changes, not on every code edit.
+
 ### Changed
 
 - Standardized the repository documentation contract and moved active planning to the workspace root `ROADMAP.md`.

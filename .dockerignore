@@ -16,3 +16,9 @@ payloads
 ursa.egg-info
 major/ursa.db
 major/tls
+dist
+deploy
+*.tgz
+*.md
+CHANGELOG*
+ROADMAP*
